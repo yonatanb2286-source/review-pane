@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://appsforoffice.microsoft.com https://*.microsoft.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://appsforoffice.microsoft.com; frame-src 'self'; object-src 'none'">
+<title>חלונית הסקירה</title>
+<link rel="stylesheet" href="taskpane.css?v=0.1.0">
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<script src="version.js?v=0.1.0"></script>
+<script src="wordPort.js?v=0.1.0"></script>
+<script src="ui.js?v=0.1.0"></script>
+</head>
+<body>
+<header>
+  <h1>חלונית הסקירה</h1>
+  <div class="sub">שלב 0: בדיקות היסוד</div>
+</header>
+
+<main>
+  <section id="safety" class="box warn">
+    <div id="docname">קובץ: …</div>
+    <label class="check"><input type="checkbox" id="isCopy"><span>אני עובד על <b>עותק</b> של הקובץ, לא על הקובץ הראשי</span></label>
+  </section>
+
+  <section class="box">
+    <h2>א. בדיקות אוטומטיות</h2>
+    <p>לשים את הסמן בפסקה של הספר, רצוי פסקה עם מחיקה במעקב ועם גרשיים, וללחוץ:</p>
+    <button id="runProbe" class="primary" disabled>הרץ בדיקות</button>
+    <div id="probeStatus" class="status"></div>
+  </section>
+
+  <section class="box">
+    <h2>ב. בחירה וגלילה</h2>
+    <p>אחרי הבדיקות האוטומטיות, ללחוץ לפי הסדר ולענות על השאלות.</p>
+    <div class="row">
+      <button data-sel="jump">1. קפוץ לפסקאות הבדיקה</button>
+      <button data-sel="near">2. בחר מילה על המסך</button>
+      <button data-sel="near2">3. בחר שלוש מילים על המסך</button>
+      <button data-sel="far">4. בחר מילה רחוקה</button>
+    </div>
+    <div id="selStatus" class="status"></div>
+    <div class="q" data-q="q1">האם המילים שנבחרו נראות בבירור במסמך, בזמן שהלחיצה האחרונה הייתה בחלונית?</div>
+    <div class="q" data-q="q2">בכפתורים 2 ו-3: האם Word נשאר במקומו, בלי לגלול?</div>
+    <div class="q" data-q="q3">בכפתור 4: האם Word גלל אל המילה הרחוקה?</div>
+    <div class="q" data-q="q4">אחרי בחירה: האם אפשר להקליד מיד במסמך, בלי ללחוץ עליו קודם?</div>
+    <div class="keytest">אחרי בחירה, ללחוץ על המקש ש (בלי ללחוץ קודם בשום מקום): <span id="keyResult">טרם נלחץ</span></div>
+  </section>
+
+  <section class="box">
+    <h2>ג. קבצים</h2>
+    <div id="drop" class="drop">לגרור לכאן קובץ כלשהו, או <label class="link"><input type="file" id="filePick" hidden>לבחור קובץ</label></div>
+    <div id="fileStatus" class="status"></div>
+    <div id="idbStatus" class="status"></div>
+    <button id="dl">הורד קובץ בדיקה</button>
+    <div class="q" data-q="q5">האם נשמר הקובץ "בדיקת הורדה - חלונית הסקירה.txt" (בתיקיית ההורדות)?</div>
+    <p class="hint">בסוף: לסגור את Word, לפתוח שוב את העותק ואת החלונית, ולבדוק שמופיעה כאן שורה "נמצא קובץ שנשמר".</p>
+  </section>
+
+  <section class="box">
+    <h2>ד. הדוח</h2>
+    <div class="row">
+      <button id="copyReport" class="primary">העתק את הדוח</button>
+      <button id="saveReport">שמור את הדוח כקובץ</button>
+    </div>
+    <div id="copyStatus" class="status"></div>
+    <textarea id="report" readonly dir="rtl"></textarea>
+    <button id="cleanup" class="danger">מחק את פסקאות הבדיקה מהעותק</button>
+    <div id="cleanStatus" class="status"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="size"></span>
+  <span id="ver"></span>
+</footer>
+</body>
+</html>
