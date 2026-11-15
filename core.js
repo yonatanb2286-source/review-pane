@@ -423,7 +423,8 @@
       try {
         if (!(await this.port.getTracking())) { await this.port.setTrackingOn(); if (!(await this.port.getTracking())) return { ok: false, why: 'מעקב השינויים כבוי ולא נדלק: לא נכתב דבר' }; }
         const ok = await this.port.applyEdit(edit);
-        return { ok: ok !== false };
+        if (ok === false) return { ok: false, why: (this.port.lastError ? 'לא נכתב דבר: ' + this.port.lastError : 'לא נכתב דבר') };
+        return { ok: true, warn: this.port.lastWarn || null };
       } finally { this.busy = false; }
     }
 

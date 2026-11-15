@@ -1,5 +1,5 @@
 /* review.js — חלונית הסקירה (שלב 3): מסך ראשי עם טקסט יציב, מסך "עוד", רשימה, סיכום, מצב הדגמה.
-   מדבר עם המסמך רק דרך ReviewCore.Session ו-port. בשלב 3 ה-port הוא WordPortFake (הדגמה).
+   מדבר עם המסמך רק דרך ReviewCore.Session ו-port. ב-Word ה-port הוא WordPortWord; מחוץ ל-Word (הדגמה ובדיקות) WordPortFake.
    כלל העיצוב: אחרי החלטה לא בונים מחדש את הטקסט, רק מחליפים מחלקות (צבע/קו), כך ששום מילה לא זזה. */
 (function () {
   'use strict';
@@ -17,9 +17,10 @@
   window.__pane = A;   // לבדיקות
 
   // ───────── טעינה
-  async function start(pkg, port) {
-    A.port = port || WordPortFake.FakeDoc.fromPackage(pkg);
-    A.S = new C.Session(A.port, pkg, { log: {} });
+  async function start(pkg, port, saved) {
+    A.port = port || (A.inWord ? new WordPortWord.WordPort() : WordPortFake.FakeDoc.fromPackage(pkg));
+    A.times = (saved && saved.times) || {};
+    A.S = new C.Session(A.port, pkg, { log: (saved && saved.log) || {} });
     A.P = A.S.P;
     if (A.port.setPackage) A.port.setPackage(A.P);
     if (A.port.onCursorMoved) A.port.onCursorMoved(onCursor);
@@ -34,6 +35,28 @@
     const first = A.order.find((id) => NEED.has(st(id))) || A.order[0];
     if (first) go(first); else empty('אין פריטים בחבילה');
     window.addEventListener('resize', () => { if (A.pid) { const c = A.cur; A.pid = null; go(c); } });
+    if (A.inWord) { clearInterval(A.saveT); A.saveT = setInterval(save, 2000); save(); }
+  }
+  // ───────── שמירה ב-IndexedDB (החבילה + היומן), כדי שבפתיחה הבאה של Word העבודה תימשך
+  const DB = {
+    open() { return new Promise((ok, no) => { try { const r = indexedDB.open('review-pane', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); } catch (e) { no(e); } }); },
+    async get(k) { const db = await DB.open(); return new Promise((ok, no) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => no(q.error); }); },
+    async put(k, v) { const db = await DB.open(); return new Promise((ok, no) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = () => ok(); t.onerror = () => no(t.error); }); },
+  };
+  const pkgKey = (pk) => 'log:' + pk.siman + ':' + pk.round + ':' + (pk.built || '');
+  async function save() {
+    if (!A.S) return;
+    const pk = A.P.pkg, rec = { log: A.S.log, times: A.times };
+    const j = JSON.stringify(rec); if (j === A.savedJ) return;
+    try { await DB.put(pkgKey(pk), rec); if (!A.savedPkg) { await DB.put('cur', pk); A.savedPkg = true; } A.savedJ = j; } catch (e) { A.saveErr = e.message; }
+  }
+  async function loadPkg(pkg) {
+    // חבילה חדשה מחליפה את הנוכחית; היומן של כל חבילה נשמר בנפרד ולא נמחק
+    if (A.S) await save();
+    A.savedPkg = false; A.savedJ = null;
+    let saved = null; if (A.inWord) { try { saved = await DB.get(pkgKey(pkg)); } catch (e) { /* בלי שמירה */ } }
+    A.pid = null;
+    await start(pkg, null, saved);
   }
   const st = (id) => { const s = A.S.state(id); return s ? s.state : 'notfound'; };
   const item = (id) => A.P.items.get(id);
@@ -283,6 +306,8 @@
         A.wide = { key: ss.loc.key, from, to };
         lab = 'ההצעה עם המילים שסביבה. אפשר לשנות כל דבר כאן, גם להזיז את הפסיק. רק מה שתשנה ייכתב במעקב בשמך:';
       } else cur = it.cluster ? it.new.trim() : it.new;
+      const wk = A.wide ? A.wide.key + ':' + A.wide.from + ':' + A.wide.to : null;
+      if (wk && wk !== A.wideSel && A.port.select) { A.wideSel = wk; A.selfMove = Date.now(); A.port.select(A.wide.key, A.wide.from, A.wide.to).catch(() => {}); }
       h += `<div class="oth"><label>${lab}</label><textarea id="othT" dir="rtl">${esc(cur)}</textarea>
         <div class="row"><button id="othOk" class="ok">כתוב</button><button id="othNo">ביטול</button></div></div>`;
     } else if (A.mode === 'note') {
@@ -338,7 +363,7 @@
   const doApprove = () => busy(async () => {
     const id = A.cur, r = await A.S.approve(id);
     if (!r.ok) { A.msg = r.why; return renderAll(); }
-    A.times[id] = new Date().toISOString(); advance();
+    A.times[id] = new Date().toISOString(); advance(); warnAfter();
   });
   const doReject = (why) => busy(async () => {
     const id = A.cur; A.mode = null;
@@ -359,8 +384,9 @@
     const r = A.wide && (it.cluster || it.op === 'none') ? await A.S.otherRange(id, A.wide.key, A.wide.from, A.wide.to, text) : await A.S.other(id, val);
     A.mode = null;
     if (!r.ok) { A.msg = r.why; return renderAll(); }
-    A.times[id] = new Date().toISOString(); advance();
+    A.times[id] = new Date().toISOString(); advance(); warnAfter();
   });
+  function warnAfter() { if (A.port.lastWarn) { A.msg = '⚠ בשינוי שנכתב עכשיו: ' + A.port.lastWarn; A.port.lastWarn = null; renderDet(); } }
   const doReopen = () => busy(async () => {
     const id = A.cur, s = st(id);
     if (['rejected', 'seen'].includes(s)) { delete A.S.log[id]; delete A.times[id]; await A.S.refresh(); renderAll(); }
@@ -414,6 +440,7 @@
       const tech = pk.items.filter((it) => it.kind === 'tech');
       const techHere = tech.filter((it) => it.pid === A.pid);
       h += `<h2>עוד ${back}</h2>
+        ${A.port && A.port.diag ? `<div class="box"><b>דוח אבחון</b> <span class="hint">(להעתקה לשיחה אם משהו לא עבד)</span><textarea readonly style="width:100%;height:90px" dir="rtl">${esc(A.port.diag.join('\n'))}</textarea></div>` : ''}
         <div class="box"><b>אישור מרוכז בפסקה הנוכחית</b><div class="hint">כל שינוי נכתב בנפרד במעקב. לחיצה שנייה מאשרת.</div>
         <button class="big${A.armed === 'p' ? ' arm' : ''}" id="bulkP" ${np ? '' : 'disabled'}>${A.armed === 'p' ? 'לחץ שוב לאישור: ' : ''}אשר את כל הפיסוק שנותר בפסקה (${np})</button>
         <button class="big${A.armed === 'a' ? ' arm' : ''}" id="bulkA" ${here.length ? '' : 'disabled'}>${A.armed === 'a' ? 'לחץ שוב לאישור: ' : ''}אשר את כל מה שנותר בפסקה (${here.length})</button>
@@ -469,7 +496,7 @@
       $('expT').hidden = false; $('expT').value = txt;
     });
     if (name === 'load') {
-      const take = (file) => { const fr = new FileReader(); fr.onload = () => { try { const pkg = JSON.parse(fr.result); sc.hidden = true; sc.innerHTML = ''; A.pid = null; A.times = {}; start(pkg); } catch (e) { $('loadMsg').textContent = 'הקובץ אינו חבילת סקירה: ' + e.message; } }; fr.readAsText(file); };
+      const take = (file) => { const fr = new FileReader(); fr.onload = () => { try { const pkg = JSON.parse(fr.result); sc.hidden = true; sc.innerHTML = ''; A.pid = null; A.times = {}; loadPkg(pkg).catch((e2) => { screen('load'); $('loadMsg').textContent = 'הטעינה נכשלה: ' + e2.message; }); } catch (e) { $('loadMsg').textContent = 'הקובץ אינו חבילת סקירה: ' + e.message; } }; fr.readAsText(file); };
       $('pick').onchange = (e) => e.target.files[0] && take(e.target.files[0]);
       const d = $('drop');
       d.ondragover = (e) => { e.preventDefault(); d.classList.add('over'); };
@@ -492,6 +519,18 @@
   // ───────── הפעלה
   A.start = start; A.screen = screen; A.go = go; A.page = page;
   window.addEventListener('DOMContentLoaded', () => {});
+  async function boot(inWord) {
+    A.inWord = !!inWord;
+    $('ver').textContent = 'גרסה ' + (window.PANE_VERSION || '');
+    if (A.inWord) {
+      try {
+        const pk = await DB.get('cur');
+        if (pk) { await loadPkg(pk); return; }
+      } catch (e) { screen('load'); $('loadMsg').textContent = 'הסימן השמור לא נטען: ' + e.message; return; }
+    }
+    screen('load');
+  }
   if (window.DEMO_PKG) start(window.DEMO_PKG);
-  else { $('ver').textContent = 'גרסה ' + (window.PANE_VERSION || ''); screen('load'); }
+  else if (window.Office && Office.onReady) Office.onReady((info) => boot(info && info.host === Office.HostType.Word));
+  else boot(false);
 }());
