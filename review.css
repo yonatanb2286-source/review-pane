@@ -1,0 +1,107 @@
+:root{--bg:#fbfaf7;--fg:#1a1a1a;--muted:#5d6166;--line:#d8d4cc;--acc:#1f4e79;
+--ins:#bfe8c8;--insfg:#0d5a24;--del:#f6c9c4;--delfg:#9b1c12;--ref:#cfe0fa;--reffg:#173f78;--qq:#ffe58a;
+--accbg:#eef7f0;--othbg:#e4eefb;--gone:#a9a9a9;--cur:#1f4e79;--ok:#1b7a3a;--bad:#b3261e;--oth:#2f62b0}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden}
+body{font-family:'ZA Heebo','Segoe UI',Arial,sans-serif;font-size:15px;line-height:1.4;direction:rtl}
+button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid #9aa4ae;background:#fff;color:var(--fg)}
+button:disabled{opacity:.4;cursor:not-allowed}
+#app{position:relative;height:100vh;width:100%;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 1fr var(--detH,clamp(150px,30vh,240px)) auto;gap:6px;padding:6px 8px 6px}
+/* שורת מצב */
+#status{border-bottom:1px solid var(--line);padding-bottom:4px}
+.srow{display:flex;align-items:center;gap:6px;justify-content:space-between;white-space:nowrap;height:24px;overflow:hidden}
+#sTitle{font-weight:700;color:var(--acc)}
+#sLeft{font-weight:700}
+#sPos{color:var(--muted);font-size:14px;padding:0 4px;border-radius:5px;transition:background .5s}
+#sPos.flash{background:var(--qq)}
+.chip{font-size:12px;padding:1px 7px;border-radius:10px;background:#e3f2e7;color:var(--ok)}
+.chip.off{background:#fde3e0;color:var(--bad)}
+.mini{font-size:13px;padding:1px 9px;height:24px}
+.sbtns{display:flex;gap:4px}
+/* הטקסט היציב */
+#text,#measure{font-family:'ZA Frank','David','Times New Roman',serif;font-size:19px;line-height:1.62;padding:6px 8px;text-align:justify;word-spacing:1px}
+#text{overflow:hidden;background:#fff;border:2px solid var(--line);border-radius:8px;transition:border-color .5s}
+#text.turn{border-color:var(--qq)}
+#measure{position:absolute;visibility:hidden;top:0;right:0;height:auto;overflow:visible;border:2px solid transparent}
+.u{}
+.hd{display:block;font-weight:700;text-align:right;margin-bottom:2px}
+.it{cursor:pointer;border-radius:3px}
+.it.pn{padding:0 4px;border-radius:3px}
+.sp{font-family:'ZA Heebo',Arial,sans-serif;font-weight:700;padding:0 2px}
+/* פתוח */
+.ins{background:var(--ins);color:var(--insfg)}
+.del{background:var(--del);color:var(--delfg);text-decoration:line-through;text-decoration-thickness:2px}
+.k-ref.ins{background:var(--ref);color:var(--reffg)}
+.k-heading.ins,.k-topic.ins{background:var(--ins)}
+.k-split{background:var(--ins);color:var(--insfg)}
+.k-query,.qflag{background:var(--qq)!important;color:var(--fg)!important}
+.k-info{text-decoration:underline dotted 2px var(--acc);text-underline-offset:4px}
+.st-blocked.ins,.st-blocked.k-split{opacity:.65}
+/* אושר */
+.st-accepted.ins,.st-accepted.k-split{background:var(--accbg);color:var(--fg)}
+.st-accepted.del{background:none;color:var(--gone)}
+/* נדחה / לא רלוונטי */
+.st-rejected.ins,.st-na.ins,.st-rejected.k-split,.st-na.k-split{background:none;color:#c4c4c4;text-decoration:line-through;text-decoration-thickness:1px}
+.st-rejected.del,.st-na.del{background:none;color:var(--fg);text-decoration:none}
+/* אחר / השתנה / לא נמצא */
+.st-other{background:var(--othbg)!important;color:var(--fg)!important}
+.st-other.del{color:var(--gone)!important}
+.st-changed,.st-notfound{background:none!important;color:var(--fg)!important;text-decoration:underline wavy 1.5px #d07a00!important}
+.st-seen.k-info{text-decoration-color:#bbb}
+/* הנוכחי */
+.cur{outline:2.5px solid var(--cur);outline-offset:1px;filter:brightness(.88) saturate(1.3)}
+/* פרטי השינוי */
+#det{position:relative;border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden}
+#detIn{height:100%;overflow-y:auto;padding:7px 9px 18px}
+#detMore{position:absolute;bottom:0;left:0;right:0;text-align:center;font-size:12px;background:linear-gradient(transparent,#fff 45%);color:var(--acc);padding-top:8px;display:none;pointer-events:none}
+#det.more #detMore{display:block}
+.dh{display:flex;gap:7px;align-items:baseline;flex-wrap:wrap;margin-bottom:4px}
+.tag{font-size:13px;font-weight:700;padding:1px 8px;border-radius:10px;background:#eceae5}
+.tag.k-punct{background:var(--ins);color:var(--insfg)} .tag.k-ref{background:var(--ref);color:var(--reffg)}
+.tag.k-query{background:var(--qq)} .tag.k-heading,.tag.k-split,.tag.k-topic{background:#e0f0e4;color:var(--insfg)}
+.ba{font-family:'ZA Frank',serif;font-size:17px}
+.ba .o{color:var(--delfg);text-decoration:line-through} .ba .n{color:var(--insfg)}
+.stt{margin-inline-start:auto;font-size:13px;color:var(--muted)}
+.qqbar{background:var(--qq);font-weight:700;padding:3px 8px;border-radius:5px;margin:4px 0}
+.note{font-size:15px;margin:3px 0}
+.rs{font-size:13px;font-weight:700;padding:1px 8px;border-radius:10px;display:inline-block;margin:4px 0 2px}
+.rs-verified,.rs-gray{background:#e3f2e7;color:var(--ok)} .rs-corrected{background:#fff0c8;color:#7a5200}
+.rs-not_found,.rs-unchecked{background:#fde3e0;color:var(--bad)} .rs-from_history{background:#e8e4f6;color:#4a3a8a}
+.quote{border:1px solid #b9cbe6;background:#f5f8fd;border-radius:6px;padding:5px 8px;margin-top:4px}
+.quote.none{border-color:#e7b4ad;background:#fdf3f1;color:var(--bad);font-size:14px}
+.qsrc{font-size:12px;color:var(--muted);direction:rtl}
+.qtxt{font-family:'ZA Frank',serif;font-size:17px;line-height:1.5} .qtxt b{background:#fff3b0}
+.err{color:var(--bad);font-weight:700;margin:4px 0}
+.oth textarea,.rnote textarea{width:100%;font-family:'ZA Frank',serif;font-size:17px;padding:5px;border:2px solid var(--oth);border-radius:6px;resize:none;height:64px}
+.oth .row,.rnote .row{display:flex;gap:6px;margin-top:4px}
+.oth .row button,.rnote .row button{padding:4px 12px}
+.oth label{font-size:13px;color:var(--muted)}
+/* כפתורים */
+#btns{display:grid;gap:5px}
+#row1{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;height:50px}
+#row1 button{font-size:18px;font-weight:700;border:none;color:#fff}
+#row1 .ok{background:var(--ok)} #row1 .no{background:var(--bad)} #row1 .ot{background:var(--oth)}
+#row1 .seen{grid-column:1/4;background:var(--acc)}
+#row1 .done{grid-column:1/3;display:flex;align-items:center;justify-content:center;font-weight:700;border-radius:7px;background:#eceae5;font-size:16px}
+#row1 .done.accepted{background:var(--accbg);color:var(--ok)} #row1 .done.rejected{background:#fdeceb;color:var(--bad)} #row1 .done.other{background:var(--othbg);color:var(--oth)}
+#row1 .reo{background:#fff;color:var(--fg);border:1px solid #9aa4ae;font-size:15px}
+#row2{display:flex;align-items:center;gap:5px;height:32px}
+#row2 .nav{flex:1;height:32px;font-size:15px}
+#ver{font-size:11px;color:var(--muted)}
+/* מסכים משניים */
+#screen{position:absolute;inset:0;background:var(--bg);padding:8px;overflow-y:auto;z-index:5}
+#screen h2{font-size:17px;margin:2px 0 6px;color:var(--acc);display:flex;justify-content:space-between;align-items:center}
+#screen .box{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0}
+#screen .big{display:block;width:100%;padding:8px;margin:5px 0;font-size:15px;text-align:right}
+#screen .big.arm{background:#fff4d6;border-color:#e0b84a;font-weight:700}
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}
+.chips button{font-size:13px;padding:2px 8px;border-radius:12px}
+.chips button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.lrow{display:grid;grid-template-columns:34px 62px 1fr 58px;gap:4px;padding:4px 2px;border-bottom:1px solid #eee;font-size:13px;cursor:pointer;align-items:baseline}
+.lrow:hover{background:#f1f4f7} .lrow .t{font-family:'ZA Frank',serif;font-size:15px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cnt td{padding:2px 6px} .cnt{border-collapse:collapse;font-size:14px}
+#screen textarea{width:100%;height:120px;font-family:Consolas,monospace;font-size:11px;direction:ltr}
+.drop{border:2px dashed #9aa4ae;border-radius:8px;padding:18px;text-align:center;color:var(--muted);margin-top:10px}
+.drop.over{background:#eef4fa;border-color:var(--acc)}
+.hint{font-size:13px;color:var(--muted)}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:10px;font-family:'ZA Heebo',sans-serif;font-size:15px;color:var(--muted)}

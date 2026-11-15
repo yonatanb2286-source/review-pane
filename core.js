@@ -272,7 +272,9 @@
           return l && l.exact ? l.startSeq : null;
         };
         for (const c of (P.clustersOf.get(p.pid) || [])) {
-          let loc = locate(seq, c.ctx_before, c.ctx_after, c.outcomes, c.from / ntok);
+          // נוסח "אחר" שנרשם ביומן הוא אפשרות נוספת במקום (אחרת תוצאה קצרה יותר, למשל המקור, עלולה להיתפס כקידומת שלו)
+          const extra = c.items.map((iid) => this.log[iid]).filter((l) => l && l.state === 'other' && l.span).map((l) => splitWords(l.span));
+          let loc = locate(seq, c.ctx_before, c.ctx_after, c.outcomes.concat(extra), c.from / ntok);
           if (!loc) loc = locateBetween(seq, c.ctx_before, c.ctx_after, c.outcomes[0].length + 6);   // נוסח אחר במקום (של יונתן)
           clLoc.set(c.cid, loc);
           if (!loc) { c.items.forEach((iid) => st.set(iid, { state: 'notfound', why: 'המקום לא נמצא בוודאות' })); continue; }
@@ -438,13 +440,16 @@
         if (edit.kind !== 'tokenEdit' && edit.kind !== 'deleteTokens') edit.runs = pickRuns(it, edit.text, custom);
         expect = tgt.map(canon).join(' ');
         edit.tag = it.cluster;
+        const prevLog = this.log[id];
+        if (custom !== undefined) this.log[id] = Object.assign({}, prevLog || {}, { state: 'other', span: expect, pending: true });
+        const restore = () => { if (custom !== undefined) { if (prevLog) this.log[id] = prevLog; else delete this.log[id]; } };
         const r = await this._write(edit);
-        if (!r.ok) return r;
+        if (!r.ok) { restore(); return r; }
         await this.refresh(it.pid);
         const s2 = this.state(id);
         const got = s2 && s2.current;
-        if (got !== expect) return { ok: false, failed: true, why: 'אחרי הכתיבה הטקסט אינו כמצופה. בטל ב-Ctrl+Z ובדוק', edit };
-        if (custom !== undefined) this._log(id, { state: 'other', text: custom, span: got });
+        if (got !== expect) { restore(); return { ok: false, failed: true, why: 'אחרי הכתיבה הטקסט אינו כמצופה. בטל ב-Ctrl+Z ובדוק', edit }; }
+        if (custom !== undefined) { delete this.log[id].pending; this._log(id, { state: 'other', text: custom, span: got }); }
         else if (this.log[id]) delete this.log[id];
         this.S.compute(this.live, new Set([it.pid]));
         return { ok: true, edit };
