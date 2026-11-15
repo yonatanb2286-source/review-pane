@@ -46,7 +46,7 @@
       }
       const it = this.P.items.get(tag);
       if (it) {
-        if (o && o.pid === it.pid && o.idx === it.from) return true;
+        if (o && o.pid === it.pid && o.idx >= it.from && o.idx <= Math.max(it.from, it.to)) return true;
         if (o && o.cid) { const c2 = this.P.clusters.get(o.cid); if (c2 && c2.pid === it.pid && c2.from <= it.from && it.from <= c2.to) return true; }
         return false;
       }

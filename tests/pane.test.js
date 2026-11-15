@@ -43,7 +43,7 @@ const findCase = (p, kind, skip) => p.evaluate(([kind, skip]) => {
   const st = (id) => (A.S.state(id) || {}).state;
   for (const id of A.order) {
     const it = A.P.items.get(id);
-    if (it.kind !== kind || st(id) !== 'open' || skip.includes(id)) continue;
+    if (it.kind !== kind || !['open', 'info'].includes(st(id)) || skip.includes(id) || (kind === 'info' && !(A.S.state(id) || {}).loc)) continue;
     const i = A.order.indexOf(id);
     const nx = A.order.slice(i + 1).find((x) => NEED.includes(st(x)));
     if (nx && A.P.items.get(nx).pid === it.pid) return [id, nx];
@@ -54,8 +54,8 @@ const findCase = (p, kind, skip) => p.evaluate(([kind, skip]) => {
 async function stability(file) {
   const p = await open(file, SIZES[0]);
   let n = 0;
-  for (const kind of ['punct', 'word', 'spelling', 'abbr', 'ref', 'heading', 'split', 'translation']) {
-    for (const act of ['approve', 'reject', 'other']) {
+  for (const kind of ['punct', 'word', 'spelling', 'abbr', 'ref', 'heading', 'split', 'translation', 'info']) {
+    for (const act of kind === 'info' ? ['seen', 'other'] : ['approve', 'reject', 'other']) {
       if (act === 'other' && kind === 'split') continue;
       const c = await findCase(p, kind); if (!c) continue;
       const [id, nx] = c;
@@ -64,23 +64,25 @@ async function stability(file) {
       const before = await snap(p);
       if (act === 'approve') await p.click('#bOk');
       else if (act === 'reject') await p.click('#bNo');
+      else if (act === 'seen') await p.click('#bSeen');
       else {
         await p.click('#bOt');
         const mid = await snap(p);
         ok(JSON.stringify(mid.words) === JSON.stringify(before.words) && JSON.stringify(mid.regions) === JSON.stringify(before.regions), `${file} ${id}: פתיחת "אחר" הזיזה משהו`);
-        const v = await p.evaluate((id) => { const it = __pane.P.items.get(id); const s = it.new.trim(); return /^[.,:;]$/.test(s) ? (s === ';' ? ':' : ';') : s + 'ו'; }, id);
+        // שדה רחב: משנים מילה שכנה (הראשונה), וההצעה עצמה נשארת; במידע: משנים את המילה
+        const v = await p.evaluate(() => { const t = document.getElementById('othT').value.split(' '); t[0] = t[0] + 'ו'; return t.join(' '); });
         await p.fill('#othT', v); await p.click('#othOk');
       }
       await p.waitForTimeout(60); await p.waitForFunction(() => !__pane.busy);
       const em = await p.evaluate(() => __pane.msg); if (em) { ok(false, `${file} ${id} ${act}: ${em}`); continue; }
       const after = await snap(p);
-      const want = { approve: ['accepted'], reject: ['rejected'], other: ['other'] }[act];
+      const want = { approve: ['accepted'], reject: ['rejected'], other: ['other'], seen: ['seen'] }[act];
       const s = await p.evaluate((id) => __pane.S.state(id).state, id);
       ok(want.includes(s), `${file} ${id} ${act}: המצב ${s}`);
       const nx2 = await p.evaluate((id) => { const A = __pane, N = ['open', 'blocked', 'changed', 'notfound', 'info'], i = A.order.indexOf(id);
         return A.order.slice(i + 1).concat(A.order.slice(0, i)).find((x) => N.includes(A.S.state(x).state)); }, id);
       ok(after.cur === nx2, `${file} ${id}: ההדגשה לא עברה לפריט הפתוח הבא (${after.cur} במקום ${nx2})`);
-      ok(JSON.stringify(after.regions) === JSON.stringify(before.regions), `${file} ${id} ${act}: אזור זז או שינה גודל`);
+      { const d = before.regions.filter((x, i) => x !== after.regions[i]); ok(!d.length, `${file} ${id} ${act}: אזור זז: ${d.join(" ; ")} -> ${after.regions.filter((x, i) => x !== before.regions[i]).join(" ; ")}`); }
       if (after.btns.length === before.btns.length) ok(JSON.stringify(after.btns) === JSON.stringify(before.btns), `${file} ${id} ${act}: כפתור זז`);
       if (nxSame && nx2 === nx) {
         ok(after.where === before.where, `${file} ${id} ${act}: הקטע התחלף אף שהפריט הבא בתוכו`);
@@ -145,6 +147,30 @@ async function marks(file) {
   await p.context().close();
 }
 
+// קריאה ברצף: PageDown מהתחלה עד הסוף עובר על כל קטע של כל פסקה פעם אחת, בלי גלילה, ובחזרה עם PageUp
+async function reading(file) {
+  const p = await open(file, SIZES[0]);
+  const r = await p.evaluate(() => {
+    const A = __pane, seen = [], errs = [];
+    A.go(A.order[0]); while (A.P.pkg.paragraphs.findIndex((x) => x.pid === A.pid) > 0 || A.chunk > 0) { const k = A.pid + ':' + A.chunk; A.page(-1); if (A.pid + ':' + A.chunk === k) break; }
+    for (let i = 0; i < 2000; i++) {
+      const k = A.pid + ':' + A.chunk; if (seen.includes(k)) errs.push('פעמיים ' + k); seen.push(k);
+      const t = document.getElementById('text'); if (t.scrollHeight > t.clientHeight + 1) errs.push('גלילה ' + k);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
+      if (A.pid + ':' + A.chunk === k) break;
+    }
+    const total = A.P.pkg.paragraphs.length;
+    const paras = new Set(seen.map((x) => x.split(':')[0])).size;
+    let back = 0; for (let i = 0; i < 2000; i++) { const k = A.pid + ':' + A.chunk; A.page(-1); if (A.pid + ':' + A.chunk === k) break; back++; }
+    return { n: seen.length, paras, total, back, errs };
+  });
+  ok(!r.errs.length, `${file}: קריאה ברצף: ${r.errs.slice(0, 3).join(', ')}`);
+  ok(r.paras === r.total, `${file}: קריאה ברצף עברה על ${r.paras} מתוך ${r.total} פסקאות`);
+  ok(r.back === r.n - 1, `${file}: חזרה אחורה ${r.back} במקום ${r.n - 1}`);
+  await p.context().close();
+  return r.n;
+}
+
 async function screens(file) {
   const p = await open(file, SIZES[0]);
   for (const sc of ['list', 'more', 'sum']) {
@@ -199,6 +225,7 @@ async function shots(dir) {
   console.log('סימונים וכיוון: נבדק');
   for (const s of ['קה', 'קד']) console.log(`יציבות ${s}: ${await stability(pkgFile(s))} מקרים נמדדו באותו קטע`);
   for (const s of ['קה', 'קו']) console.log(`הליכה ${s}: ${await walk(pkgFile(s), 140)}`);
+  for (const s of ['קה', 'קג']) console.log(`קריאה ברצף ${s}: ${await reading(pkgFile(s))} קטעים`);
   await screens(pkgFile('קה'));
   if (SHOTS) { await shots(SHOTS); console.log('צילומים: ' + SHOTS); }
   await browser.close();

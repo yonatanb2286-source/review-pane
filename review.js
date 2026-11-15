@@ -150,16 +150,38 @@
     const ch = A.chunks.findIndex(([a, b]) => u >= a && u <= b);
     if (ch !== A.chunk) {
       const turned = A.chunk !== -1 || A.flashNext;
+      if (ch < 0) return;
       A.chunk = ch;
       const [a, b] = A.chunks[ch];
       $('text').innerHTML = A.units.slice(a, b + 1).map((x) => x.html).join(' ');
       if (turned) flash();
     }
     A.flashNext = false;
-    A.cur = id;
+    A.cur = id; A.reading = false;
     paintStates();
     renderStatus(); renderDet(); renderBtns();
     if (!fromCursor) selectInWord(id);
+  }
+  // קריאה ברצף: דפדוף קטע אחר קטע בכל הסימן, גם בפסקאות בלי שינויים
+  function showChunk(pid, ch) {
+    if (A.pid !== pid) { A.pid = pid; const b = buildUnits(A.P.paras.get(pid)); A.units = b.units; A.unitOf = b.unitOf; A.chunks = chunkUnits(A.units); }
+    if (ch < 0) ch = A.chunks.length - 1;
+    const [a, b] = A.chunks[ch];
+    const here = A.order.filter((id) => item(id).pid === pid && (A.unitOf.get(id) || 0) >= a && (A.unitOf.get(id) || 0) <= b);
+    const pick = here.find((id) => NEED.has(st(id))) || here[0];
+    A.chunk = -2;          // מכריח ציור מחדש
+    if (pick) { A.reading = false; go(pick); A.reading = false; return; }
+    A.chunk = ch; A.reading = true; A.mode = null; A.msg = null;
+    $('text').innerHTML = A.units.slice(a, b + 1).map((x) => x.html).join(' ');
+    flash(); paintStates(); renderStatus(); renderDet(); renderBtns();
+    if (A.port.selectParagraph) { const m = A.S.S.match.map.get(pid); if (m && m.keys && m.keys[0]) { A.selfMove = Date.now(); A.port.selectParagraph(m.keys[0]).catch(() => {}); } }
+  }
+  function page(dir) {
+    const paras = A.P.pkg.paragraphs, pi = paras.findIndex((p) => p.pid === A.pid);
+    const ch = A.chunk + dir;
+    if (ch >= 0 && ch < A.chunks.length) return showChunk(A.pid, ch);
+    const np = paras[pi + dir]; if (!np) return;
+    showChunk(np.pid, dir > 0 ? 0 : -1);
   }
   function flash() { const t = $('text'), p = $('sPos'); t.classList.add('turn'); p.classList.add('flash'); setTimeout(() => { t.classList.remove('turn'); p.classList.remove('flash'); }, 700); }
   function paintStates() {
@@ -200,7 +222,7 @@
     const withItems = pk.paragraphs.filter((p) => p.items.length).length;
     $('sTitle').textContent = `סימן ${pk.siman} · סבב ${pk.round}`;
     $('sLeft').textContent = `נותרו ${left()} מתוך ${A.order.length}`;
-    $('sPos').textContent = `פסקה ${pi} מתוך ${pk.paragraphs.length}` + (A.chunks.length > 1 ? ` · קטע ${A.chunk + 1} מתוך ${A.chunks.length}` : '');
+    $('sPos').textContent = `פסקה ${pi}/${pk.paragraphs.length}` + (A.chunks.length > 1 ? ` · קטע ${A.chunk + 1}/${A.chunks.length}` : '') + (A.reading ? ' · קריאה' : '');
     $('sPos').title = `${withItems} פסקאות עם שינויים`;
   }
 
@@ -211,8 +233,16 @@
       const c = A.P.clusters.get(it.cluster), k = c.items.indexOf(it.id);
       const o = c.orig, nw = C.outcomeText(c, A.P.items, 1 << k);
       if (it.kind === 'ref' && !it.char_len) return `<span class="n">+ ${esc(short(it.new, 44))}</span>`;
-      if (o.length + nw.length > 70) return `<span class="o">${esc(short(it.old || '', 30))}</span> ← <span class="n">${esc(short(it.new, 34))}</span>`;
-      return `<span class="o">${esc(o)}</span> ← <span class="n">${esc(nw)}</span>`;
+      // רק מה שמשתנה מסומן: חלק משותף רגיל, מחיקה בקו חוצה, הוספה בירוק (פסיק = רק הפסיק)
+      let p = 0; while (p < o.length && p < nw.length && o[p] === nw[p]) p++;
+      let q = 0; while (q < o.length - p && q < nw.length - p && o[o.length - 1 - q] === nw[nw.length - 1 - q]) q++;
+      if (!(PUNCT.test(o.slice(p, o.length - q)) && PUNCT.test(nw.slice(p, nw.length - q)))) {   // שינוי באותיות: מסמנים מילה שלמה
+        while (p > 0 && !/\s/.test(o[p - 1])) p--;
+        while (q > 0 && !/\s/.test(o[o.length - q])) q--;
+      }
+      const pre = o.slice(0, p), del = o.slice(p, o.length - q), ins = nw.slice(p, nw.length - q), suf = o.slice(o.length - q);
+      const cut = (x, n) => (x.length > n ? x.slice(0, n - 1) + '…' : x);
+      return `${esc(cut(pre, 24))}${del ? `<span class="o">${esc(cut(del, 30))}</span>` : ''}${ins ? `<span class="n">${esc(cut(ins, 34))}</span>` : ''}${esc(cut(suf, 24))}`;
     }
     if (it.op === 'split_before') return `פסקה חדשה מ: <span class="n">«${esc(A.P.paras.get(it.pid).orig_tokens.slice(it.from, it.from + 3).join(' '))}»</span>`;
     if (['heading_before', 'topic', 'para_before'].includes(it.op)) return 'שורה חדשה (בראש הטקסט)';
@@ -230,17 +260,34 @@
     return h;
   }
   function renderDet() {
+    if (A.reading) { $('detIn').innerHTML = '<div class="note"><b>קריאה ברצף.</b> אין שינויים בקטע הזה.</div><div class="note hint">▼ או PageDown לקטע הבא, ▲ או PageUp לקודם. "הבא" עובר לשינוי הפתוח הבא.</div>'; moreHint(); return; }
     const it = item(A.cur), s = st(A.cur), box = $('detIn');
     let h = `<div class="dh"><span class="tag k-${it.kind}">${KIND[it.kind] || it.kind}</span><span class="ba">${beforeAfter(it)}</span><span class="stt">${STATE[s] || s}</span></div>`;
     if (A.msg) h += `<div class="err">${esc(A.msg)}</div>`;
     const qq = (it.flags || []).includes('??') || it.kind === 'query' || /\?\?/.test(it.new || '');
     if (A.mode === 'other') {
-      const cur = it.cluster ? it.new.trim() : it.new;
-      h += `<div class="oth"><label>הנוסח שלך (ייכתב במעקב בשמך במקום ההצעה):</label><textarea id="othT" dir="rtl">${esc(cur)}</textarea>
+      const ss = A.S.state(A.cur) || {};
+      let cur, lab = 'הנוסח שלך (ייכתב במעקב בשמך במקום ההצעה):';
+      A.wide = null;
+      if (it.op === 'none' && !ss.loc) cur = it.old;
+      else if (it.op === 'none') {
+        const lv = A.S.S.liveByKey.get(ss.loc.key).tokens, from = Math.max(0, ss.loc.from - 2), to = Math.min(lv.length - 1, ss.loc.to + 2);
+        cur = lv.slice(from, to + 1).join(' '); A.wide = { key: ss.loc.key, from, to };
+        lab = 'המקום עם המילים שסביבו. אפשר לתקן כאן, להוסיף ציון או ד"ה. רק מה שתשנה ייכתב במעקב בשמך:';
+      } else if (it.cluster && ss.loc && ss.mask !== undefined) {
+        // שדה רחב: ההצעה עם שתי מילים לפניה ואחריה, כדי שאפשר יהיה גם להזיז אותה
+        const c = A.P.clusters.get(it.cluster), lv = A.S.S.liveByKey.get(ss.loc.key).tokens;
+        const from = Math.max(0, ss.loc.from - 2), to = Math.min(lv.length - 1, ss.loc.to + 2);
+        const mid = C.splitWords(C.outcomeText(c, A.P.items, ss.mask | (1 << c.items.indexOf(it.id))));
+        cur = lv.slice(from, ss.loc.from).concat(mid, lv.slice(ss.loc.to + 1, to + 1)).join(' ');
+        A.wide = { key: ss.loc.key, from, to };
+        lab = 'ההצעה עם המילים שסביבה. אפשר לשנות כל דבר כאן, גם להזיז את הפסיק. רק מה שתשנה ייכתב במעקב בשמך:';
+      } else cur = it.cluster ? it.new.trim() : it.new;
+      h += `<div class="oth"><label>${lab}</label><textarea id="othT" dir="rtl">${esc(cur)}</textarea>
         <div class="row"><button id="othOk" class="ok">כתוב</button><button id="othNo">ביטול</button></div></div>`;
     } else if (A.mode === 'note') {
-      h += `<div class="rnote"><label class="hint">סיבת הדחייה (לא חובה):</label><textarea id="noteT" dir="rtl">${esc((A.S.log[A.cur] || {}).why || '')}</textarea>
-        <div class="row"><button id="noteOk">דחה עם הערה</button><button id="noteNo">ביטול</button></div></div>`;
+      h += `<div class="rnote"><label class="hint">${it.op === 'none' ? 'מה החלטת (נכנס לקובץ ההחלטות):' : 'סיבת הדחייה (לא חובה):'}</label><textarea id="noteT" dir="rtl">${esc((A.S.log[A.cur] || {}).why || '')}</textarea>
+        <div class="row"><button id="noteOk">${it.op === 'none' ? 'ראיתי, עם הערה' : 'דחה עם הערה'}</button><button id="noteNo">ביטול</button></div></div>`;
     } else {
       if (qq) h += `<div class="qqbar">?? לבירור</div>`;
       if (s === 'changed') h += `<div class="err">המקום נערך בקובץ: הנוסח שם אינו המקור ואינו ההצעה. "אחר" ירשום את מה שכתוב שם.</div>`;
@@ -258,28 +305,31 @@
     box.innerHTML = h; box.scrollTop = 0;
     const t = $('othT') || $('noteT'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
     if ($('othOk')) { $('othOk').onclick = () => doOther($('othT').value); $('othNo').onclick = () => { A.mode = null; renderDet(); renderBtns(); }; }
-    if ($('noteOk')) { $('noteOk').onclick = () => doReject($('noteT').value); $('noteNo').onclick = () => { A.mode = null; renderDet(); }; }
+    if ($('noteOk')) { $('noteOk').onclick = () => (it.op === 'none' ? doSeen($('noteT').value) : doReject($('noteT').value)); $('noteNo').onclick = () => { A.mode = null; renderDet(); }; }
     moreHint();
   }
   function moreHint() { const b = $('detIn'); $('det').classList.toggle('more', b.scrollHeight - b.scrollTop - b.clientHeight > 4); }
 
   // ───────── כפתורים
   function renderBtns() {
+    if (A.reading) { $('row1').innerHTML = '<button class="ok" disabled>אישור</button><button class="no" disabled>דחייה</button><button class="ot" disabled>אחר</button>'; $('bNote').disabled = true; return; }
     const s = st(A.cur), it = item(A.cur), r = $('row1');
     const lg = A.S.log[A.cur] || {};
-    if (it.op === 'none' && (s === 'info' || s === 'open')) r.innerHTML = `<button class="seen" id="bSeen">ראיתי</button>`;
+    const isRef = it.kind === 'query' || it.kind === 'ref' || !!(it.ref_check && it.ref_check.text);
+    if (it.op === 'none' && (s === 'info' || s === 'open')) r.innerHTML = `<button class="seen" id="bSeen">${isRef ? 'המקור תקין' : 'ראיתי'}</button><button class="ot" id="bOt"${(A.S.state(A.cur) || {}).loc && A.trackOn ? '' : ' disabled'}>אחר</button>`;
     else if (['accepted', 'rejected', 'other', 'seen', 'na'].includes(s)) {
       const tm = A.times[A.cur] || lg.time;
-      r.innerHTML = `<div class="done ${s}">${STATE[s]}${tm ? ' · ' + hhmm(tm) : ''}</div><button class="reo" id="bReo">פתח מחדש</button>`;
+      r.innerHTML = `<div class="done ${s}">${s === 'seen' && lg.verdict ? 'המקור תקין' : STATE[s]}${tm ? ' · ' + hhmm(tm) : ''}</div><button class="reo" id="bReo">פתח מחדש</button>`;
     } else {
       const canOk = s === 'open';
       r.innerHTML = `<button class="ok" id="bOk"${canOk && A.trackOn ? '' : ' disabled'}>אישור</button><button class="no" id="bNo">דחייה</button><button class="ot" id="bOt"${(s === 'open' || s === 'changed') && A.trackOn ? '' : ' disabled'}>אחר</button>`;
     }
-    $('bNote').disabled = !(s === 'open' || s === 'changed' || s === 'rejected');
+    $('bNote').disabled = !(s === 'open' || s === 'changed' || s === 'rejected' || (it.op === 'none' && ['info', 'seen', 'open'].includes(s)));
+    $('bNote').textContent = it.op === 'none' ? 'הערה' : 'הערה לדחייה';
     if ($('bOk')) $('bOk').onclick = doApprove;
     if ($('bNo')) $('bNo').onclick = () => doReject('');
     if ($('bOt')) $('bOt').onclick = openOther;
-    if ($('bSeen')) $('bSeen').onclick = doSeen;
+    if ($('bSeen')) $('bSeen').onclick = () => doSeen();
     if ($('bReo')) $('bReo').onclick = doReopen;
   }
 
@@ -295,7 +345,8 @@
     if (!['open', 'changed', 'blocked', 'notfound', 'rejected'].includes(st(id))) return;
     await A.S.reject(id, why || ''); A.times[id] = new Date().toISOString(); advance();
   });
-  const doSeen = () => busy(async () => { const id = A.cur; await A.S.markSeen(id); A.times[id] = new Date().toISOString(); advance(); });
+  const doSeen = (why) => busy(async () => { const id = A.cur, it = item(id); A.mode = null; await A.S.markSeen(id);
+    if (it.kind === 'query' || it.kind === 'ref' || (it.ref_check && it.ref_check.text)) A.S.log[id].verdict = 'ok'; if (typeof why === 'string' && why.trim()) A.S.log[id].why = why.trim(); A.times[id] = new Date().toISOString(); advance(); });
   function openOther() {
     if (st(A.cur) === 'changed') return busy(async () => { const id = A.cur; const r = await A.S.recordOther(id); if (!r.ok) { A.msg = r.why; return renderAll(); } A.times[id] = new Date().toISOString(); advance(); });
     A.mode = 'other'; renderDet();
@@ -305,7 +356,7 @@
     const it = item(id);
     const val = it.cluster && /^\s/.test(it.new) ? ' ' + text : text;
     if (!text) { A.msg = 'הנוסח ריק'; return renderDet(); }
-    const r = await A.S.other(id, val);
+    const r = A.wide && (it.cluster || it.op === 'none') ? await A.S.otherRange(id, A.wide.key, A.wide.from, A.wide.to, text) : await A.S.other(id, val);
     A.mode = null;
     if (!r.ok) { A.msg = r.why; return renderAll(); }
     A.times[id] = new Date().toISOString(); advance();
@@ -329,6 +380,8 @@
   $('bNext').onclick = () => step(1);
   $('bNote').onclick = () => { A.mode = 'note'; renderDet(); };
   $('bList').onclick = () => screen('list');
+  $('bPgUp').onclick = () => page(-1);
+  $('bPgDn').onclick = () => page(1);
   $('bMore').onclick = () => screen('more');
   document.addEventListener('keydown', (e) => {
     if (!A.S) return;
@@ -340,6 +393,8 @@
     if (!$('screen').hidden) { if (e.key === 'Escape') closeScreen(); return; }
     const k = e.key;
     if (k === 'Enter') { e.preventDefault(); if ($('bOk') && !$('bOk').disabled) doApprove(); else if ($('bSeen')) doSeen(); }
+    else if (k === 'PageDown') { e.preventDefault(); page(1); }
+    else if (k === 'PageUp') { e.preventDefault(); page(-1); }
     else if (k === 'Delete') { e.preventDefault(); if ($('bNo')) doReject(''); }
     else if (k === 'F2' || k === 'א') { e.preventDefault(); if ($('bOt') && !$('bOt').disabled) openOther(); }
     else if (k === 'ArrowLeft' || k === 'ArrowDown') { e.preventDefault(); step(1); }
@@ -425,7 +480,7 @@
   function exportDecisions() {
     const pk = A.P.pkg;
     return { format: 1, siman: pk.siman, round: pk.round, exported: new Date().toISOString(), pane_version: window.PANE_VERSION,
-      items: pk.items.map((it) => { const s = st(it.id), lg = A.S.log[it.id] || {}; return { id: it.id, kind: it.kind, state: s === 'info' ? 'open' : s, time: A.times[it.id] || lg.time || null, why: lg.why || '', text: s === 'other' ? (lg.text || null) : null }; }) };
+      items: pk.items.map((it) => { const s = st(it.id), lg = A.S.log[it.id] || {}; return { id: it.id, kind: it.kind, state: s === 'info' ? 'open' : s, time: A.times[it.id] || lg.time || null, why: lg.why || '', verdict: lg.verdict || null, text: s === 'other' ? (lg.text || null) : null }; }) };
   }
   function listText(it) {
     if (it.cluster) { const c = A.P.clusters.get(it.cluster); return c.orig + ' ← ' + C.outcomeText(c, A.P.items, 1 << c.items.indexOf(it.id)); }
@@ -435,7 +490,7 @@
   function empty(t) { $('text').innerHTML = `<div class="empty">${esc(t)}</div>`; }
 
   // ───────── הפעלה
-  A.start = start; A.screen = screen; A.go = go;
+  A.start = start; A.screen = screen; A.go = go; A.page = page;
   window.addEventListener('DOMContentLoaded', () => {});
   if (window.DEMO_PKG) start(window.DEMO_PKG);
   else { $('ver').textContent = 'גרסה ' + (window.PANE_VERSION || ''); screen('load'); }

@@ -292,6 +292,7 @@
               const on = !!(mask >> k & 1);
               let s = on ? 'accepted' : 'open';
               if (!on && lg && lg.state === 'rejected') s = 'rejected';
+              if (!on && lg && lg.state === 'other' && lg.wide && lg.span === exact) s = 'other';   // "אחר" רחב: יונתן שינה סביב ההצעה (למשל הזיז פסיק)
               if (on && lg && lg.state === 'other') s = 'other';   // "אחר" שהנוסח שלו זהה להצעה
               st.set(iid, { state: s, loc: where, mask, cid: c.cid, current: exact });
             } else {
@@ -304,7 +305,16 @@
         // פיצולים, כותרות, נושא, מידע
         for (const it of its) {
           if (it.cluster) continue;
-          if (it.op === 'none') { st.set(it.id, { state: (this.log[it.id] && this.log[it.id].state) || 'info' }); continue; }
+          if (it.op === 'none') {
+            // פריט מידע: גם לו יש מקום, כדי שיונתן יוכל לכתוב שם "אחר"
+            const lg = this.log[it.id], outs = [p.orig_tokens.slice(it.from, it.to + 1)];
+            if (lg && lg.state === 'other' && lg.span) outs.push(splitWords(lg.span));
+            const l = locate(seq, p.orig_tokens.slice(Math.max(0, it.from - 3), it.from), p.orig_tokens.slice(it.to + 1, it.to + 4), outs, it.from / ntok);
+            let loc = null, current = null;
+            if (l) { const sp = seq.slice(l.startSeq, l.endSeq); if (sp.length && sp.every((x) => x.key === sp[0].key)) { loc = { key: sp[0].key, from: sp[0].idx, to: sp[sp.length - 1].idx }; current = sp.map((x) => canon(x.t)).join(' '); } }
+            st.set(it.id, { state: (lg && lg.state) || 'info', loc, current });
+            continue;
+          }
           if (it.op === 'split_before') {
             const ss = tokenStart(it.from);
             if (ss === null || ss >= seq.length) { st.set(it.id, { state: 'notfound', why: 'מקום הפיצול לא נמצא' }); continue; }
@@ -423,7 +433,29 @@
       if (!it) return { ok: false, why: 'אין פריט כזה' };
       await this.refresh(this.S.st ? it.pid : null);
       const s = this.state(id);
-      if (it.op === 'none') return { ok: false, why: 'פריט מידע: אין מה לכתוב' };
+      if (it.op === 'none') {
+        if (custom === undefined) return { ok: false, why: 'פריט מידע: אין מה לכתוב' };
+        if (!s || !s.loc) return { ok: false, why: 'המקום לא נמצא בוודאות: לא נכתב דבר' };
+        const cur = this.S.liveByKey.get(s.loc.key).tokens.slice(s.loc.from, s.loc.to + 1), tgt = splitWords(custom);
+        const expect = tgt.map(canon).join(' ');
+        if (!tgt.length) return { ok: false, why: 'הנוסח ריק' };
+        if (expect !== cur.map(canon).join(' ')) {
+          const edit = planTokenEdit(s.loc.key, s.loc.from, cur, tgt);
+          if (!edit) return { ok: false, why: 'לא חושבה כתיבה' };
+          edit.tag = id;
+          const prevLog = this.log[id];
+          this.log[id] = Object.assign({}, prevLog || {}, { state: 'other', span: expect, pending: true });
+          const r = await this._write(edit);
+          if (!r.ok) { if (prevLog) this.log[id] = prevLog; else delete this.log[id]; return r; }
+          await this.refresh(it.pid);
+          const s2 = this.state(id);
+          if (!s2 || s2.current !== expect) { if (prevLog) this.log[id] = prevLog; else delete this.log[id]; this.S.compute(this.live, new Set([it.pid])); return { ok: false, failed: true, why: 'אחרי הכתיבה הטקסט אינו כמצופה. בטל ב-Ctrl+Z ובדוק', edit }; }
+          delete this.log[id].pending;
+        }
+        this._log(id, { state: 'other', text: custom, span: expect });
+        this.S.compute(this.live, new Set([it.pid]));
+        return { ok: true };
+      }
       if (!s || ['notfound', 'changed', 'na', 'blocked'].includes(s.state))
         return { ok: false, why: { notfound: 'המקום לא נמצא בוודאות', changed: 'המקום השתנה בקובץ', na: 'לא רלוונטי (פריט שהוא תלוי בו נדחה)', blocked: 'צריך לאשר קודם את הפריט שהוא תלוי בו' }[s && s.state] || 'אין מצב' };
       if (s.state === 'accepted' && custom === undefined) return { ok: true, already: true };
@@ -468,6 +500,33 @@
         if (!s2 || !['changed', 'other', 'accepted'].includes(s2.state)) return { ok: false, failed: true, why: 'אחרי הכתיבה הפסקה לא נמצאה', edit };
         this._log(id, { state: 'other', text: custom, span: s2.current || custom }); this.S.compute(this.live);
       } else if (!s2 || s2.state !== 'accepted') return { ok: false, failed: true, why: 'אחרי הכתיבה המצב אינו "אושר". בטל ב-Ctrl+Z ובדוק', edit };
+      return { ok: true, edit };
+    }
+    /* "אחר" רחב: יונתן כותב נוסח לטווח שכולל את מקום הפריט ומילים סביבו (key, from..to בפסקה החיה).
+       נכתבות רק התיבות שהשתנו. אחר כך בודקים שהטווח בדיוק כמו שהוקלד. */
+    async otherRange(id, key, from, to, text, why) {
+      const it = this.P.items.get(id);
+      if (!it) return { ok: false, why: 'אין פריט כזה' };
+      await this.refresh(it.pid);
+      const s = this.state(id);
+      if (!s || !s.loc || s.loc.key !== key || s.loc.from < from || Math.max(s.loc.from, s.loc.to) > to) return { ok: false, why: 'המקום השתנה מאז שנפתח השדה: לא נכתב דבר' };
+      const live = this.S.liveByKey.get(key);
+      if (!live || from < 0 || to >= live.tokens.length) return { ok: false, why: 'הטווח לא נמצא' };
+      const cur = live.tokens.slice(from, to + 1), tgt = splitWords(text);
+      if (!tgt.length) return { ok: false, why: 'הנוסח ריק' };
+      const expect = tgt.map(canon).join(' ');
+      if (expect === cur.map(canon).join(' ')) return { ok: false, why: 'לא שונה דבר' };
+      const edit = planTokenEdit(key, from, cur, tgt);
+      if (!edit) return { ok: false, why: 'לא חושבה כתיבה' };
+      edit.tag = 'wide:' + id;
+      const r = await this._write(edit);
+      if (!r.ok) return r;
+      await this.refresh(it.pid);
+      const after = (this.S.liveByKey.get(key) || { tokens: [] }).tokens.slice(from, from + tgt.length).map(canon).join(' ');
+      if (after !== expect) return { ok: false, failed: true, why: 'אחרי הכתיבה הטקסט אינו כמצופה. בטל ב-Ctrl+Z ובדוק', edit };
+      const s2 = this.state(id);
+      this._log(id, { state: 'other', text, span: (s2 && s2.current) || null, wide: true, why: why || '' });
+      this.S.compute(this.live, new Set([it.pid]));
       return { ok: true, edit };
     }
     async reject(id, why) { this._log(id, { state: 'rejected', why: why || '' }); return this.refresh(); }
