@@ -333,16 +333,28 @@
           }
           if (anchorOk === false) { st.set(it.id, { state: 'notfound', why: 'מקום הכותרת לא נמצא' }); continue; }
           const ai = keyIndex.get(anchorKey);
-          const prev = ai > 0 ? M.live[ai - 1] : null;
           const wantStyle = new Set([it.para_style, it.para_style_id]);
-          const isNew = prev && wantStyle.has(prev.style) && !this._isPkgPara(prev.key);
           const lg = this.log[it.id];
-          let s;
+          // כמה פסקאות חדשות לפני אותה תיבה (למשל שתי שורות נושא): כל פריט מחפש את שלו ברצף הפסקאות החדשות שלפני העוגן
+          const sibs = its.filter((x) => !x.cluster && x.from === it.from && ['heading_before', 'topic', 'para_before'].includes(x.op))
+            .sort((a, b) => (a.order || 0) - (b.order || 0) || (a.id < b.id ? -1 : 1));
+          const run = [];
+          for (let j = ai - 1; j >= 0; j--) { const q = M.live[j]; if (this._isPkgPara(q.key) || !(HEAD_STYLES.has(q.style) || TOPIC_STYLES.has(q.style) || wantStyle.has(q.style))) break; run.unshift(q); }
+          const mine = run.filter((q) => wantStyle.has(q.style));
+          const textOf = (q) => norm(q.tokens.join(' '));
+          const claimed = (x) => { const l2 = this.log[x.id]; return mine.find((q) => textOf(q) === norm(x.new) || (l2 && l2.state === 'other' && norm(l2.span || '') === textOf(q))); };
+          const own = claimed(it);
+          const others = new Set(sibs.filter((x) => x !== it).map(claimed).filter(Boolean));
+          const loose = mine.filter((q) => q !== own && !others.has(q));
+          let s, current = null;
           if (anchorOk === 'nosplit') s = (lg && lg.state === 'rejected') ? 'rejected' : 'blocked';
-          else if (isNew && norm(prev.tokens.join(' ')) === norm(it.new)) s = (lg && lg.state === 'other') ? 'other' : 'accepted';
-          else if (isNew) s = (lg && lg.state === 'other' && norm(lg.span || '') === norm(prev.tokens.join(' '))) ? 'other' : 'changed';
+          else if (own) { current = own.tokens.join(' '); s = textOf(own) === norm(it.new) && !(lg && lg.state === 'other') ? 'accepted' : 'other'; }
+          else if (loose.length && sibs.length === 1) { current = loose[loose.length - 1].tokens.join(' '); s = 'changed'; }
           else s = (lg && lg.state === 'rejected') ? 'rejected' : 'open';
-          st.set(it.id, { state: s, loc: { key: anchorKey }, current: isNew ? prev.tokens.join(' ') : null });
+          // מקום הכתיבה: לפני הפסקה של אח מאוחר יותר שכבר נכתב, אחרת לפני העוגן
+          const k = sibs.indexOf(it);
+          const later = sibs.slice(k + 1).map(claimed).find(Boolean);
+          st.set(it.id, { state: s, loc: { key: later ? later.key : anchorKey }, current });
         }
       }
       // תלויות: פריט שתלוי בפריט שנדחה – לא רלוונטי; שתלוי בפריט פתוח – חסום
@@ -493,11 +505,14 @@
         const text = custom !== undefined ? custom : it.new;
         edit = { kind: 'insertParagraphBefore', key: s.loc.key, text, style: it.para_style, runs: custom !== undefined ? null : it.runs, tag: id };
       }
+      const prevLog = this.log[id];
+      if (custom !== undefined) this.log[id] = Object.assign({}, prevLog || {}, { state: 'other', span: custom, pending: true });
       const r = await this._write(edit);
-      if (!r.ok) return r;
+      if (!r.ok) { if (custom !== undefined) { if (prevLog) this.log[id] = prevLog; else delete this.log[id]; } return r; }
       await this.refresh(it.pid);
       const s2 = this.state(id);
       if (custom !== undefined) {
+        delete this.log[id].pending;
         if (!s2 || !['changed', 'other', 'accepted'].includes(s2.state)) return { ok: false, failed: true, why: 'אחרי הכתיבה הפסקה לא נמצאה', edit };
         this._log(id, { state: 'other', text: custom, span: s2.current || custom }); this.S.compute(this.live);
       } else if (!s2 || s2.state !== 'accepted') return { ok: false, failed: true, why: 'אחרי הכתיבה המצב אינו "אושר". בטל ב-Ctrl+Z ובדוק', edit };

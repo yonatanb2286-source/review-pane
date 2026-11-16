@@ -107,7 +107,9 @@
         }
         case 'insertParagraphBefore': {
           const first = this._clean(p)[0];
-          if (first) this._check(e, [first]);
+          // מותר לפני פסקה שנכתבה לפריט אח (אותו מקום, למשל שתי שורות נושא)
+          const sib = (a, b) => { const x = this.P && this.P.items.get(a), y = this.P && this.P.items.get(b); return x && y && x.pid === y.pid && x.from === y.from; };
+          if (first && !(first.origin && first.origin.cid && sib(first.origin.cid, e.tag))) this._check(e, [first]);
           const np = { key: 'k' + this.nextKey++, style: e.style, toks: words(e.text).map(mk) };
           this.paras.splice(this.paras.indexOf(p), 0, np);
           this._rev('para', e.text); return true;
