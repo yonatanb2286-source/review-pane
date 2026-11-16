@@ -433,7 +433,8 @@
     const sc = $('screen'); sc.hidden = false;
     const back = `<button class="mini" id="scBack">חזרה ✕</button>`;
     let h = '';
-    const pk = A.P.pkg;
+    if (!A.P) name = 'load';                      // אין עדיין סימן טעון
+    const pk = A.P ? A.P.pkg : null;
     if (name === 'more') {
       const here = A.order.filter((id) => item(id).pid === A.pid && st(id) === 'open' && item(id).op !== 'none');
       const np = here.filter((id) => item(id).kind === 'punct').length;
