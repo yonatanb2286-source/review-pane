@@ -13,13 +13,15 @@
   const hhmm = (iso) => { try { return new Date(iso).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
 
   const A = { S: null, P: null, port: null, order: [], pos: new Map(), cur: null, pid: null, units: null, chunks: null, chunk: -1,
-    mode: null, armed: null, times: {}, msg: null, filter: { st: 'need', kind: null } };
+    mode: null, armed: null, times: {}, msg: null, filter: { st: 'need', kind: null }, hist: [], reports: [], settings: { hl: true, mark: true } };
+  try { Object.assign(A.settings, JSON.parse(localStorage.getItem('review-pane-settings') || '{}')); } catch (e) { /* בלי הגדרות שמורות */ }
   window.__pane = A;   // לבדיקות
 
   // ───────── טעינה
   async function start(pkg, port, saved) {
     A.port = port || (A.inWord ? new WordPortWord.WordPort() : WordPortFake.FakeDoc.fromPackage(pkg));
-    A.times = (saved && saved.times) || {};
+    A.times = (saved && saved.times) || {}; A.reports = (saved && saved.reports) || [];
+    A.port.highlightHeadings = A.settings.hl;
     A.S = new C.Session(A.port, pkg, { log: (saved && saved.log) || {} });
     A.P = A.S.P;
     if (A.port.setPackage) A.port.setPackage(A.P);
@@ -46,7 +48,7 @@
   const pkgKey = (pk) => 'log:' + pk.siman + ':' + pk.round + ':' + (pk.built || '');
   async function save() {
     if (!A.S) return;
-    const pk = A.P.pkg, rec = { log: A.S.log, times: A.times };
+    const pk = A.P.pkg, rec = { log: A.S.log, times: A.times, reports: A.reports };
     const j = JSON.stringify(rec); if (j === A.savedJ) return;
     try { await DB.put(pkgKey(pk), rec); if (!A.savedPkg) { await DB.put('cur', pk); A.savedPkg = true; } A.savedJ = j; } catch (e) { A.saveErr = e.message; }
   }
@@ -215,13 +217,17 @@
   }
   async function selectInWord(id) {
     const s = A.S.state(id); if (!s || !s.loc || !A.port.select) return;
-    A.selfMove = Date.now();
-    try { if (s.loc.from !== undefined) await A.port.select(s.loc.key, s.loc.from, Math.max(s.loc.from, s.loc.to)); else await A.port.selectParagraph(s.loc.key); } catch (e) { /* בחירה לא חיונית */ }
+    A.selfMove = Date.now(); A.lastCur = s.loc.key;
+    const from = s.loc.from !== undefined ? s.loc.from : s.loc.token, to = s.loc.from !== undefined ? Math.max(s.loc.from, s.loc.to) : s.loc.token;
+    try { if (from !== undefined) await A.port.select(s.loc.key, from, to); else await A.port.selectParagraph(s.loc.key); } catch (e) { /* בחירה לא חיונית */ }
+    if (A.port.mark && A.settings.mark) A.port.mark(s.loc.key, from, to).catch(() => {});
   }
   // תזוזת סמן ב-Word על ידי יונתן (לא כזו שהחלונית גרמה)
   async function onCursor() {
-    if (A.selfMove && Date.now() - A.selfMove < 800) return;
-    const key = await A.port.getCursorParagraph(); if (!key) return;
+    // מגיבים רק כשיונתן עבר לפסקה אחרת ב-Word. כתיבה או בחירה של החלונית, או הקלדה באותה פסקה, לא מקפיצות את החלונית.
+    if (A.busy || (A.selfMove && Date.now() - A.selfMove < 1500)) return;
+    const key = await A.port.getCursorParagraph(); if (!key || key === A.lastCur) return;
+    A.lastCur = key;
     const pid = [...A.S.S.match.map.entries()].find(([, m]) => m.keys && m.keys.includes(key));
     if (!pid) return;
     const ids = A.order.filter((id) => item(id).pid === pid[0]);
@@ -309,6 +315,7 @@
       const wk = A.wide ? A.wide.key + ':' + A.wide.from + ':' + A.wide.to : null;
       if (wk && wk !== A.wideSel && A.port.select) { A.wideSel = wk; A.selfMove = Date.now(); A.port.select(A.wide.key, A.wide.from, A.wide.to).catch(() => {}); }
       h += `<div class="oth"><label>${lab}</label><textarea id="othT" dir="rtl">${esc(cur)}</textarea>
+        <label class="hint"><input type="checkbox" id="othMM" ${it.kind === 'ref' ? 'checked' : ''}> מה שבסוגריים (…) ייכתב בסגנון מ"מ</label>
         <div class="row"><button id="othOk" class="ok">כתוב</button><button id="othNo">ביטול</button></div></div>`;
     } else if (A.mode === 'note') {
       h += `<div class="rnote"><label class="hint">${it.op === 'none' ? 'מה החלטת (נכנס לקובץ ההחלטות):' : 'סיבת הדחייה (לא חובה):'}</label><textarea id="noteT" dir="rtl">${esc((A.S.log[A.cur] || {}).why || '')}</textarea>
@@ -359,16 +366,17 @@
   }
 
   // ───────── פעולות
-  async function busy(fn) { if (A.busy) return; A.busy = true; try { await fn(); } catch (e) { A.msg = 'שגיאה: ' + e.message; renderDet(); } finally { A.busy = false; } }
+  async function busy(fn) { if (A.busy) return; A.busy = true; try { await fn(); } catch (e) { A.msg = 'שגיאה: ' + e.message; renderDet(); } finally { A.busy = false; A.selfMove = Date.now(); } }
+  function hist(id, act, r) { A.hist.push({ t: new Date().toISOString(), id, act, ok: !r || !!r.ok, why: r && !r.ok ? r.why : undefined, edit: r && r.edit ? r.edit.kind : undefined }); if (A.hist.length > 30) A.hist.shift(); }
   const doApprove = () => busy(async () => {
-    const id = A.cur, r = await A.S.approve(id);
+    const id = A.cur, r = await A.S.approve(id); hist(id, 'אישור', r);
     if (!r.ok) { A.msg = r.why; return renderAll(); }
     A.times[id] = new Date().toISOString(); advance(); warnAfter();
   });
   const doReject = (why) => busy(async () => {
     const id = A.cur; A.mode = null;
     if (!['open', 'changed', 'blocked', 'notfound', 'rejected'].includes(st(id))) return;
-    await A.S.reject(id, why || ''); A.times[id] = new Date().toISOString(); advance();
+    await A.S.reject(id, why || ''); hist(id, 'דחייה'); A.times[id] = new Date().toISOString(); advance();
   });
   const doSeen = (why) => busy(async () => { const id = A.cur, it = item(id); A.mode = null; await A.S.markSeen(id);
     if (it.kind === 'query' || it.kind === 'ref' || (it.ref_check && it.ref_check.text)) A.S.log[id].verdict = 'ok'; if (typeof why === 'string' && why.trim()) A.S.log[id].why = why.trim(); A.times[id] = new Date().toISOString(); advance(); });
@@ -381,7 +389,9 @@
     const it = item(id);
     const val = it.cluster && /^\s/.test(it.new) ? ' ' + text : text;
     if (!text) { A.msg = 'הנוסח ריק'; return renderDet(); }
+    A.port.mmParens = !!($('othMM') && $('othMM').checked);
     const r = A.wide && (it.cluster || it.op === 'none') ? await A.S.otherRange(id, A.wide.key, A.wide.from, A.wide.to, text) : await A.S.other(id, val);
+    A.port.mmParens = false; hist(id, 'אחר', r);
     A.mode = null;
     if (!r.ok) { A.msg = r.why; return renderAll(); }
     A.times[id] = new Date().toISOString(); advance(); warnAfter();
@@ -390,7 +400,7 @@
   const doReopen = () => busy(async () => {
     const id = A.cur, s = st(id);
     if (['rejected', 'seen'].includes(s)) { delete A.S.log[id]; delete A.times[id]; await A.S.refresh(); renderAll(); }
-    else { A.msg = 'שינוי שכבר נכתב בקובץ: לביטול, Ctrl+Z ב-Word מיד אחרי האישור, או דחיית השינוי במעקב ב-Word. בכניסה הבאה לפסקה הפריט יחזור ל"פתוח".'; renderDet(); }
+    else { A.msg = 'השינוי הזה כבר נכתב בקובץ' + (A.times[id] ? ' (' + hhmm(A.times[id]) + ')' : '') + ', ולכן החלונית לא דוחה אותו. כדי לבטל: ב-Word לחיצה ימנית על השינוי ואז "דחה" (או Ctrl+Z מיד אחרי האישור). אחרי זה הפריט יחזור כאן ל"פתוח".'; renderDet(); }
   });
   async function bulk(kindOnly) {
     const ids = A.order.filter((id) => item(id).pid === A.pid && st(id) === 'open' && item(id).op !== 'none' && (!kindOnly || item(id).kind === 'punct'));
@@ -441,6 +451,12 @@
       const tech = pk.items.filter((it) => it.kind === 'tech');
       const techHere = tech.filter((it) => it.pid === A.pid);
       h += `<h2>עוד ${back}</h2>
+        <div class="box"><b>דיווח על בעיה או בקשה</b><div class="hint">נרשם יחד עם המקום שבו אתה עומד ועם הפעולות האחרונות של החלונית.</div>
+          <textarea id="repT" dir="rtl" style="width:100%;height:60px" placeholder="מה קרה, או מה היית רוצה"></textarea>
+          <div class="row"><button id="repOk">שמור דיווח</button><button id="repExp" ${A.reports.length ? '' : 'disabled'}>ייצוא כל הדיווחים (${A.reports.length})</button></div><div id="repMsg" class="hint"></div></div>
+        <div class="box"><b>הגדרות</b>
+          <label class="hint" style="display:block"><input type="checkbox" id="setHl" ${A.settings.hl ? 'checked' : ''}> הזרחה צהובה לכותרת צד שנכתבת</label>
+          <label class="hint" style="display:block"><input type="checkbox" id="setMark" ${A.settings.mark ? 'checked' : ''}> סימון המקום בתוך Word בקו תחתון צבעוני (לא נשמר בקובץ)</label></div>
         ${A.port && A.port.diag ? `<div class="box"><b>דוח אבחון</b> <span class="hint">(להעתקה לשיחה אם משהו לא עבד)</span><textarea readonly style="width:100%;height:90px" dir="rtl">${esc(A.port.diag.join('\n'))}</textarea></div>` : ''}
         <div class="box"><b>אישור מרוכז בפסקה הנוכחית</b><div class="hint">כל שינוי נכתב בנפרד במעקב. לחיצה שנייה מאשרת.</div>
         <button class="big${A.armed === 'p' ? ' arm' : ''}" id="bulkP" ${np ? '' : 'disabled'}>${A.armed === 'p' ? 'לחץ שוב לאישור: ' : ''}אשר את כל הפיסוק שנותר בפסקה (${np})</button>
@@ -482,6 +498,16 @@
       if (A.armed !== key) { A.armed = key; return screen('more'); }
       A.armed = null; const r = await bulk(punctOnly); A.pid = null; screen('more', `נכתבו ${r.ok}${r.bad ? `, ${r.bad} לא נכתבו (ראו ברשימה)` : ''}.`);
     };
+    on('repOk', () => {
+      const t = $('repT').value.trim(); if (!t) return;
+      const it = A.cur && item(A.cur);
+      A.reports.push({ time: new Date().toISOString(), note: t, version: window.PANE_VERSION, siman: pk.siman, round: pk.round, item: A.cur || null, kind: it ? it.kind : null, op: it ? it.op : null,
+        state: A.cur ? st(A.cur) : null, pid: A.pid, recent: A.hist.slice(-6), diag: A.port.diag ? A.port.diag.slice(-12) : [] });
+      save(); screen('more', 'הדיווח נשמר (' + A.reports.length + ').');
+    });
+    on('repExp', () => download(`דיווחים - סימן ${pk.siman} - סבב ${pk.round}.json`, JSON.stringify({ reports: A.reports }, null, 1)));
+    const setT = (id, k) => { const el = $(id); if (el) el.onchange = () => { A.settings[k] = el.checked; try { localStorage.setItem('review-pane-settings', JSON.stringify(A.settings)); } catch (e) { /* */ } if (A.port) A.port.highlightHeadings = A.settings.hl; if (k === 'mark' && !el.checked && A.port.mark) A.port.mark(null).catch(() => {}); }; };
+    setT('setHl', 'hl'); setT('setMark', 'mark');
     on('bulkP', arm('p', true)); on('bulkA', arm('a', false));
     sc.querySelectorAll('[data-st]').forEach((b) => { b.onclick = () => { A.filter.st = b.dataset.st; screen('list'); }; });
     sc.querySelectorAll('[data-kind]').forEach((b) => { b.onclick = () => { A.filter.kind = b.dataset.kind || null; screen('list'); }; });
@@ -504,6 +530,9 @@
       d.ondragleave = () => d.classList.remove('over');
       d.ondrop = (e) => { e.preventDefault(); d.classList.remove('over'); e.dataTransfer.files[0] && take(e.dataTransfer.files[0]); };
     }
+  }
+  function download(name, txt) {
+    try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], { type: 'application/json' })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); return true; } catch (e) { return false; }
   }
   function exportDecisions() {
     const pk = A.P.pkg;

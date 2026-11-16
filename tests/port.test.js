@@ -81,6 +81,33 @@ async function run(pkg, d, order) {
         return info;
       });
     }
+    await test(`${name}: מיקומי מחיקות שגויים מ-Word: יישור חלופי, ועדיין = ההצעה`, async () => {
+      const d = build(pkg, true); d.badTc = true; const before = outside(d);
+      const { rest, fails, port } = await run(pkg, d);
+      // מותר שפריט ייעצר בלי כתיבה ("לא אותר בוודאות"); אסור שייכתב משהו לא נכון
+      const wrong = fails.filter((x) => !/לא אותר בוודאות/.test(x));
+      assert.strictEqual(wrong.length + rest.length, 0, wrong.slice(0, 3).join(' | '));
+      assert.ok(fails.length <= pkg.items.length * 0.05, 'יותר מדי פריטים נעצרו: ' + fails.length);
+      if (!fails.length) { const got = siman(d).map((p) => W(d.clean(p))), want = pkg.paragraphs.flatMap((p) => p.proposed.map((x) => W(x.text))); assert.deepStrictEqual(got, want); }
+      assert.strictEqual(outside(d), before);
+      return port.diag.filter((x) => /יישור חלופי/.test(x)).length + ' יישורים חלופיים, ' + fails.length + ' נעצרו בלי כתיבה';
+    });
+    await test(`${name}: פסיק ליד מילה שיונתן הוסיף בעצמו נכתב`, async () => {
+      const d = build(pkg, false); install(d); const port = new WordPort(); const S = new C.Session(port, pkg, { log: {} });
+      await S.refresh();
+      const it = pkg.items.find((i) => i.cluster && i.kind === 'punct' && i.op === 'suffix' && S.state(i.id).state === 'open');
+      if (!it) return 'אין פריט מתאים';
+      const s0 = S.state(it.id); const P = d.paras.find((x) => x.id === s0.loc.key);
+      // יונתן מוסיף "(??)" אחרי האשכול, במעקב
+      const ce = (() => { const toks = [...d.clean(P).matchAll(/\S+/g)]; const T = toks[s0.loc.from]; return T.index + T[0].length; })();
+      const rawPos = (() => { let n = 0; for (let k = 0; k < P.chars.length; k++) if (!P.chars[k].del && ++n === ce) return k + 1; })();
+      P.chars.splice(rawPos, 0, ...[...' (??)'].map((c) => ({ c, del: false, add: ME, cstyle: null })));
+      await S.refresh(); const st1 = S.state(it.id).state;
+      const r = await S.approve(it.id);
+      assert.ok(r.ok, (r.why || '') + ' מצב לפני: ' + st1 + ' | ' + port.diag.slice(-2).join(' | '));
+      assert.ok(d.clean(P).includes(String(it.new).trim()), 'הסימן לא נכתב');
+      return 'מצב לפני ' + st1 + ', אחרי ' + S.state(it.id).state;
+    });
     await test(`${name}: הוספות של יונתן עצמו לא נמחקות`, async () => {
       let refused = 0;
       for (let f = 0; f < FUZZ; f++) {

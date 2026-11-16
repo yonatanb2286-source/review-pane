@@ -42,7 +42,7 @@ class Rng {
       if (cur) out.push(cur);
     }
     const d = this.doc;
-    return coll(out.map((t) => ({ type: t.type, text: t.text, author: t.author, getRange: () => mk(d, p, t.start) })));
+    return coll(out.map((t) => ({ type: t.type, text: t.text, author: t.author, getRange: () => mk(d, p, Math.min(p.chars.length, t.start + (d.badTc ? 1 : 0))) })));
   }
   search(s) {
     const p = this._one(), raw = this.doc.raw(p).slice(this.a, this.b), q = s.replace(/\^\^/g, '^'), res = [];

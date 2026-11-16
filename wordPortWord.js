@@ -21,16 +21,63 @@
 
   // ───────── חלק טהור (נבדק ב-Node): מיפוי בין raw ל-clean
   /* dels: [{start, len}] בקואורדינטות raw. מחזיר {live:[bool], rawIdx:[clean->raw], toks:[{cs,ce}]} או זורק אם לא מתיישב */
-  function buildMap(raw, clean, dels) {
-    const live = new Array(raw.length).fill(true);
+  /* חלופה כשמיקומי המחיקות מ-Word לא מתיישבים: יישור clean בתוך raw במינימום קטעים מחוקים.
+     בשוויון מעדיפים מחיקה מוקדמת (ב-Word המחוק בא לפני המוסף). מחזיר מערך live או null. */
+  function alignLive(raw, clean, cand) {
+    const n = raw.length, m = clean.length, B = n - m;
+    if (B < 0) return null;
+    if (B === 0) return raw === clean ? new Array(n).fill(true) : null;
+    const INF = 1e9, W = B + 1;
+    // cost[i][d][g]: אחרי i תווי raw, d מחוקים (j=i-d), g=האם התו האחרון נמחק
+    const cost = [new Float64Array(W * 2).fill(INF)];
+    cost[0][0] = 0;
+    for (let i = 0; i < n; i++) {
+      const cur = cost[i], nx = new Float64Array(W * 2).fill(INF);
+      for (let d = 0; d <= B; d++) for (let g = 0; g < 2; g++) {
+        const c = cur[d * 2 + g]; if (c >= INF) continue;
+        const j = i - d;
+        if (d < B) { const v = c + (g ? 0 : 1) + (cand && cand[i] ? 0 : 1e-4); if (v < nx[(d + 1) * 2 + 1]) nx[(d + 1) * 2 + 1] = v; }
+        if (j < m && raw[i] === clean[j] && c < nx[d * 2]) nx[d * 2] = c;
+      }
+      cost.push(nx);
+    }
+    let d = B, g = cost[n][B * 2 + 1] <= cost[n][B * 2] ? 1 : 0;
+    if (cost[n][d * 2 + g] >= INF) return null;
+    const live = new Array(n).fill(true);
+    for (let i = n; i > 0; i--) {
+      const c = cost[i][d * 2 + g];
+      live[i - 1] = !g;
+      if (g) { const pd = d - 1, e = (cand && cand[i - 1] ? 0 : 1e-4); const a = cost[i - 1][pd * 2 + 1], b = cost[i - 1][pd * 2]; g = Math.abs(a + e - c) < 1e-9 ? 1 : (Math.abs(b + 1 + e - c) < 1e-9 ? 0 : 1); d = pd; }
+      else { const a = cost[i - 1][d * 2 + 1], b = cost[i - 1][d * 2]; g = Math.abs(b - c) < 1e-9 ? 0 : 1; if (Math.abs(a - c) > 1e-9 && Math.abs(b - c) > 1e-9) return null; }
+    }
+    return live;
+  }
+  function buildMap(raw, clean, dels, late) {
+    let live = new Array(raw.length).fill(true);
     for (const d of dels) for (let k = d.start; k < d.start + d.len && k < raw.length; k++) live[k] = false;
-    const rawIdx = [];
+    let rawIdx = [];
     for (let k = 0; k < raw.length; k++) if (live[k]) rawIdx.push(k);
+    let how = 'tc';
+    if (rawIdx.map((k) => raw[k]).join('') !== clean) {
+      // רמזים: כל טקסט מחוק במקום הקרוב ביותר למיקום ש-Word דיווח
+      const cand = new Array(raw.length).fill(false);
+      for (const d of dels) {
+        if (!d.text) continue;
+        let best = -1;
+        for (let k = raw.indexOf(d.text); k >= 0; k = raw.indexOf(d.text, k + 1)) if (best < 0 || Math.abs(k - d.start) < Math.abs(best - d.start)) best = k;
+        if (best >= 0) for (let k = best; k < best + d.text.length; k++) cand[k] = true;
+      }
+      if (!late) live = alignLive(raw, clean, cand);
+      else { const rv = (x) => [...x].reverse(); const l2 = alignLive(rv(raw).join(''), rv(clean).join(''), rv(cand)); live = l2 && l2.reverse(); }
+      if (!live) throw new Error('טקסט הפסקה לא מתיישב עם המחיקות במעקב (raw ' + raw.length + ', נקי ' + clean.length + ')');
+      rawIdx = []; for (let k = 0; k < raw.length; k++) if (live[k]) rawIdx.push(k);
+      how = 'align';
+    }
     const rebuilt = rawIdx.map((k) => raw[k]).join('');
     if (rebuilt !== clean) throw new Error('טקסט הפסקה לא מתיישב עם המחיקות במעקב');
     const toks = []; const re = /\S+/g; let m;
     while ((m = re.exec(clean))) toks.push({ cs: m.index, ce: m.index + m[0].length });
-    return { raw, clean, live, rawIdx, toks };
+    return { raw, clean, live, rawIdx, toks, how };
   }
   /* נקודה ב-raw לפני תו נקי c ('before') או אחרי תו נקי c-1 ('after') */
   function rawPoint(M, c, side) {
@@ -137,9 +184,22 @@
         const st = p.getRange('Start');
         const ms = dels.map((t) => { const r = st.expandTo(t.getRange('Start')); r.load('text'); return r; });
         await ctx.sync();
-        D = dels.map((t, i) => ({ start: ms[i].text.length, len: stripEnd(t.text).length }));
+        D = dels.map((t, i) => ({ start: ms[i].text.length, len: stripEnd(t.text).length, text: stripEnd(t.text) }));
       }
-      return buildMap(raw, clean, D);
+      const M = buildMap(raw, clean, D, this.lateAlign);
+      if (M.how === 'align') this._d('יישור חלופי (מיקומי המחיקות מ-Word לא התיישבו): raw ' + raw.length + ', נקי ' + clean.length + ', מחיקות ' + dels.length);
+      return M;
+    }
+    /* אחרי כתיבה של "אחר": מה שבסוגריים בטקסט שנכתב מקבל סגנון מ"מ */
+    async _mm(ctx, rng) {
+      if (!this.mmParens || !rng) return;
+      rng.load('text'); await ctx.sync();
+      const segs = String(rng.text).match(/\([^()]*\)/g) || [];
+      for (const g of segs) {
+        const res = rng.search(escSearch(g.slice(0, 250)), { matchCase: true }); res.load('items'); await ctx.sync();
+        if (res.items.length) res.items[0].style = '8_מ"מ';
+      }
+      await ctx.sync();
     }
     /* טווח Word לנקודה P ב-raw. at='end': הנקודה בסוף עוגן; 'start': בתחילתו */
     async _point(ctx, p, M, P, at) {
@@ -149,10 +209,10 @@
         if (P >= M.raw.length) return p.getRange('Content').getRange('End');
         throw new Error('אין עוגן לחיפוש');
       }
-      const r = await this._find(ctx, p, an);
+      const r = await this._find(ctx, p, an, M);
       return r.getRange(at === 'end' ? 'End' : 'Start');
     }
-    async _find(ctx, p, an) {
+    async _find(ctx, p, an, M) {
       const res = p.search(escSearch(an.text), { matchCase: true, matchWildcards: false });
       res.load('items/text');
       await ctx.sync();
@@ -162,6 +222,10 @@
       await ctx.sync();
       const hit = res.items.filter((r, i) => i < ms.length && ms[i].text.length === an.start && r.text === an.text);
       if (hit.length !== 1) throw new Error('המקום לא אותר בוודאות (' + hit.length + ')');
+      if (M && M.how === 'align') {     // ביישור חלופי: העוגן חייב להיות טקסט חי, בלי מחיקה במעקב בתוכו
+        const tc = hit[0].getTrackedChanges(); tc.load('items/type'); await ctx.sync();
+        if (tc.items.some((t) => t.type === 'Deleted')) { const er = new Error('ALIGN'); er.align = true; throw er; }
+      }
       return hit[0];
     }
     async _span(ctx, p, M, a, b) {
@@ -198,6 +262,22 @@
       this.lastError = null; this.lastWarn = null;
       const t0 = Date.now();
       try {
+        let r;
+        for (const late of [false, true]) {
+          this.lateAlign = late;
+          try { r = await this._apply(e); break; }
+          catch (er) { if (!er.align || late) throw (er.align ? new Error('המקום לא אותר בוודאות (יישור)') : er); this._d('יישור חלופי: ניסיון שני'); }
+        }
+        this.lateAlign = false;
+        this._d('✓ ' + e.kind + ' ' + (Date.now() - t0) + ' מ"ש' + (this.lastWarn ? ' · ' + this.lastWarn : ''));
+        return r;
+      } catch (err) {
+        this.lateAlign = false;
+        return this._fail((err && err.message) || String(err));
+      }
+    }
+    async _apply(e) {
+      {
         const r = await Word.run(async (ctx) => {
           ctx.document.load('changeTrackingMode'); await ctx.sync();
           if (ctx.document.changeTrackingMode === 'Off') throw new Error('מעקב השינויים כבוי');
@@ -207,8 +287,10 @@
             if (index === 0) throw new Error('לא מוסיפים פסקה לפני שורת הסימן');
             const np = p.insertParagraph(e.text, 'Before');
             np.style = CHAR_MAP[e.style] || e.style;
+            if (this.highlightHeadings && e.style === '7_כותרת-צד') np.getRange('Content').font.highlightColor = 'Yellow';
             await ctx.sync();
             await this._style(ctx, np.getRange('Content'), e.runs);
+            await this._mm(ctx, np.getRange('Content'));
             return true;
           }
           const M = await this._map(ctx, p);
@@ -224,14 +306,16 @@
                 const at = e.start === 0 ? 'start' : 'end';
                 const P = e.start === 0 ? rawPoint(M, c0, 'before') : rawPoint(M, c0, 'after');
                 const pt = await this._point(ctx, p, M, P, at);
-                pt.insertText(e.text, 'Start'); await ctx.sync();
+                const ins0 = pt.insertText(e.text, 'Start'); await ctx.sync();
+                await this._mm(ctx, ins0);
                 return true;
               }
               const a = M.rawIdx[c0], b = M.rawIdx[c1 - 1] + 1;
               const rng = await this._span(ctx, p, M, a, b);
               await this._guard(ctx, rng);
-              if (e.text) rng.insertText(e.text, 'Replace'); else rng.delete();
+              const ins1 = e.text ? rng.insertText(e.text, 'Replace') : (rng.delete(), null);
               await ctx.sync();
+              await this._mm(ctx, ins1);
               return true;
             }
             case 'insertAfter': case 'insertBefore': {
@@ -249,6 +333,7 @@
               await ctx.sync();
               await this._style(ctx, ins, e.runs);
               await this._checkInherited(ctx, ins, e.runs, p.style);
+              await this._mm(ctx, ins);
               return true;
             }
             case 'replaceTokens': case 'deleteTokens': {
@@ -264,6 +349,7 @@
               const ins = rng.insertText(e.text, 'Replace'); await ctx.sync();
               await this._style(ctx, ins, e.runs);
               await this._checkInherited(ctx, ins, e.runs, p.style);
+              await this._mm(ctx, ins);
               return true;
             }
             case 'split': {
@@ -276,10 +362,7 @@
           }
           throw new Error('פעולה לא מוכרת ' + e.kind);
         });
-        this._d('✓ ' + e.kind + ' ' + (Date.now() - t0) + ' מ"ש' + (this.lastWarn ? ' · ' + this.lastWarn : ''));
         return r;
-      } catch (err) {
-        return this._fail((err && err.message) || String(err));
       }
     }
 
@@ -300,6 +383,26 @@
       try { await this._selectRange(key, from, to, async (ctx, r) => { r.insertComment(text); await ctx.sync(); }); return true; }
       catch (e) { return this._fail(e.message); }
     }
+    /* סימון המקום ב-Word בקו תחתון של "הערת עריכה" (annotation, WordApi 1.7): לא טקסט ולא עיצוב, ולא נכתב כשינוי.
+       key=null: רק מנקה את הסימון הקודם. */
+    async mark(key, from, to) {
+      if (typeof Office !== 'undefined' && !Office.context.requirements.isSetSupported('WordApi', '1.7')) return;
+      return Word.run(async (ctx) => {
+        if (this.markIds && this.markIds.length) {
+          for (const id of this.markIds) { try { ctx.document.getAnnotationById(id).delete(); } catch (e) { /* */ } }
+          this.markIds = []; await ctx.sync().catch(() => {});
+        }
+        if (!key) return;
+        const { p } = await this._para(ctx, key);
+        const M = await this._map(ctx, p);
+        let a, b;
+        if (from === undefined || !M.toks.length) { a = 0; b = Math.min(M.raw.length, 1); }
+        else { const sp = tokSpan(M, Math.min(from, M.toks.length - 1), Math.min(to, M.toks.length - 1)); a = sp.a; b = sp.b; }
+        const r = p.insertAnnotations({ critiques: [{ colorScheme: 'Lavender', start: a, length: Math.max(1, b - a) }] });
+        await ctx.sync();
+        this.markIds = r.value || [];
+      }).catch((e) => this._d('סימון ב-Word נכשל: ' + e.message));
+    }
     async getCursorParagraph() {
       return Word.run(async (ctx) => {
         const p = ctx.document.getSelection().paragraphs.getFirst(); p.load('uniqueLocalId'); await ctx.sync();
@@ -312,5 +415,5 @@
     }
   }
 
-  return { WordPort, buildMap, rawPoint, anchorAt, tokSpan, CHAR_MAP };
+  return { WordPort, buildMap, alignLive, rawPoint, anchorAt, tokSpan, CHAR_MAP };
 }));

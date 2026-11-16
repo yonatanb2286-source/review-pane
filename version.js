@@ -1,1 +1,1 @@
-window.PANE_VERSION = "0.4.2";
+window.PANE_VERSION = "0.5.0";

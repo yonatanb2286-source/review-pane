@@ -298,7 +298,7 @@
             } else {
               // השתנה בקובץ: אם ביומן "אחר" עם הנוסח הזה – אחר
               const otherOk = lg && lg.state === 'other' && lg.span === exact;
-              st.set(iid, { state: otherOk ? 'other' : 'changed', loc: where, cid: c.cid, current: exact });
+              st.set(iid, { state: otherOk ? 'other' : (lg && lg.state === 'applied' ? 'accepted' : 'changed'), loc: where, cid: c.cid, current: exact });
             }
           });
         }
@@ -330,6 +330,12 @@
             const ss = tokenStart(it.from);
             if (ss === null || ss >= seq.length) anchorOk = false;
             else { const x = seq[ss]; anchorKey = x.key; if (x.idx !== 0) anchorOk = (it.from === 0 || !(it.depends_on || []).length) ? false : 'nosplit'; }
+          }
+          if (anchorOk === false && it.op === 'topic') {
+            // שורת נושא: מקומה תמיד אחרי שורת הסימן (ואחרי שורות נושא קיימות), גם אם פסקת התאריך שאחריה שונתה
+            let j = M.live.findIndex((q) => q.style === '1_סימן' || q.style === '1');
+            if (j >= 0) { j++; while (j < M.live.length && TOPIC_STYLES.has(M.live[j].style)) j++; }
+            if (j > 0 && j < M.live.length) { anchorKey = M.live[j].key; anchorOk = true; }
           }
           if (anchorOk === false) { st.set(it.id, { state: 'notfound', why: 'מקום הכותרת לא נמצא' }); continue; }
           const ai = keyIndex.get(anchorKey);
@@ -468,6 +474,30 @@
         this._log(id, { state: 'other', text: custom, span: expect });
         this.S.compute(this.live, new Set([it.pid]));
         return { ok: true };
+      }
+      if (s && s.state === 'changed' && it.cluster && it.kind === 'punct' && ['suffix', 'prefix'].includes(it.op) && s.loc && s.loc.from !== undefined) {
+        // יונתן ערך ליד הפסיק: מוסיפים את הסימן לתיבה שלו אם היא עדיין שם (אותה מילה)
+        const c = P.clusters.get(it.cluster), ot = splitWords(c.orig);
+        const cur = this.S.liveByKey.get(s.loc.key).tokens.slice(s.loc.from, s.loc.to + 1);
+        const t = (c.orig.slice(0, it.rel_start).match(/\s+/g) || []).length - (/^\s/.test(c.orig) ? 1 : 0);
+        const mark = String(it.new).trim();
+        // אותה מילה בטקסט החי, לפי סדר ההופעות שלה (יונתן אולי הוסיף או מחק מילה לידה)
+        const occ = t >= 0 && t < ot.length ? ot.slice(0, t).filter((x) => norm(x) === norm(ot[t])).length : -1;
+        const hits = occ < 0 ? [] : cur.map((x, k) => (norm(x) === norm(ot[t]) ? k : -1)).filter((k) => k >= 0);
+        const nOrig = occ < 0 ? 0 : ot.filter((x) => norm(x) === norm(ot[t])).length;
+        if (hits.length === nOrig && hits[occ] !== undefined && mark) {
+          const tok = cur[hits[occ]];
+          const tt = hits[occ];
+          if (it.op === 'suffix' ? tok.endsWith(mark) : tok.startsWith(mark)) { this._log(id, { state: 'applied' }); this.S.compute(this.live, new Set([it.pid])); return { ok: true, already: true }; }
+          const edit = { kind: 'tokenEdit', key: s.loc.key, token: s.loc.from + tt, start: it.op === 'suffix' ? tok.length : 0, len: 0, text: mark, tag: it.cluster };
+          const r = await this._write(edit);
+          if (!r.ok) return r;
+          await this.refresh(it.pid);
+          const now = (this.S.liveByKey.get(s.loc.key) || { tokens: [] }).tokens[s.loc.from + tt] || '';
+          if (now !== (it.op === 'suffix' ? tok + mark : mark + tok)) return { ok: false, failed: true, why: 'אחרי הכתיבה הטקסט אינו כמצופה. בטל ב-Ctrl+Z ובדוק', edit };
+          this._log(id, { state: 'applied' }); this.S.compute(this.live, new Set([it.pid]));
+          return { ok: true, edit };
+        }
       }
       if (!s || ['notfound', 'changed', 'na', 'blocked'].includes(s.state))
         return { ok: false, why: { notfound: 'המקום לא נמצא בוודאות', changed: 'המקום השתנה בקובץ', na: 'לא רלוונטי (פריט שהוא תלוי בו נדחה)', blocked: 'צריך לאשר קודם את הפריט שהוא תלוי בו' }[s && s.state] || 'אין מצב' };
