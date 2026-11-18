@@ -125,18 +125,24 @@
     }
 
     // ───── פסקאות הסימן
+    /* name: סימן אחד ("קה") או טווח ("קט-קי"): מתחילים בשורת הסימן הראשון ונגמרים לפני הסימן שאחרי האחרון */
     async _fullScan(ctx, name) {
       const t0 = Date.now();
+      const names = String(name).split(/\s*[-–]\s*/).filter(Boolean);
       const ps = ctx.document.body.paragraphs; ps.load('items/style,items/text,items/uniqueLocalId'); await ctx.sync();
-      const want = normHead('סימן ' + name);
-      // משווים לטקסט הנקי (paragraph.text כולל טקסט מחוק במעקב)
-      const cand = ps.items.filter((p) => p.style === SIMAN_STYLE && normHead(p.text).includes(normHead(name)));
-      const rv = cand.map((p) => p.getRange('Whole').getReviewedText('Current')); await ctx.sync();
-      const heads = cand.filter((p, i) => normHead(stripEnd(rv[i].value)) === want);
-      if (heads.length !== 1) throw new Error(heads.length ? 'יש במסמך יותר משורת "סימן ' + name + '" אחת' : 'שורת "סימן ' + name + '" (בסגנון ' + SIMAN_STYLE + ') לא נמצאה במסמך');
-      const i0 = ps.items.indexOf(heads[0]);
-      let i1 = i0 + 1; while (i1 < ps.items.length && ps.items[i1].style !== SIMAN_STYLE) i1++;
-      this.head = heads[0].uniqueLocalId; this.next = i1 < ps.items.length ? ps.items[i1].uniqueLocalId : null;
+      const sim = ps.items.filter((p) => p.style === SIMAN_STYLE);
+      const rv = sim.map((p) => p.getRange('Whole').getReviewedText('Current')); await ctx.sync();   // טקסט נקי (paragraph.text כולל מחוק)
+      const find = (nm) => {
+        const want = normHead('סימן ' + nm);
+        const h = sim.filter((p, i) => normHead(stripEnd(rv[i].value)) === want);
+        if (h.length !== 1) throw new Error(h.length ? 'יש במסמך יותר משורת "סימן ' + nm + '" אחת' : 'שורת "סימן ' + nm + '" (בסגנון ' + SIMAN_STYLE + ') לא נמצאה במסמך');
+        return ps.items.indexOf(h[0]);
+      };
+      const i0 = find(names[0]), iLast = find(names[names.length - 1]);
+      if (iLast < i0) throw new Error('סדר הסימנים במסמך הפוך');
+      let i1 = iLast + 1; while (i1 < ps.items.length && ps.items[i1].style !== SIMAN_STYLE) i1++;
+      this.head = ps.items[i0].uniqueLocalId; this.next = i1 < ps.items.length ? ps.items[i1].uniqueLocalId : null;
+      this.nHeads = ps.items.slice(i0, i1).filter((p) => p.style === SIMAN_STYLE).length;
       this._d('סריקה מלאה: ' + ps.items.length + ' פסקאות, ' + (Date.now() - t0) + ' מ"ש');
       return ps.items.slice(i0, i1);
     }
@@ -149,7 +155,8 @@
           await ctx.sync();
           const L = ps.items;
           if (L.length && L[0].uniqueLocalId === this.head && L[0].style === SIMAN_STYLE) {
-            let n = 1; while (n < L.length && L[n].style !== SIMAN_STYLE) n++;
+            let n = 0, k = 0;
+            for (; n < L.length; n++) { if (L[n].uniqueLocalId === this.next) break; if (L[n].style === SIMAN_STYLE && ++k > (this.nHeads || 1)) break; }
             return L.slice(0, n);
           }
         } catch (e) { /* נופלים לסריקה מלאה */ }

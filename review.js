@@ -19,8 +19,10 @@
 
   // ───────── טעינה
   async function start(pkg, port, saved) {
+    A.started = false;          // עד שהטעינה מצליחה לא שומרים דבר (כדי שחבילה שנכשלה לא תחליף את הקודמת)
     A.port = port || (A.inWord ? new WordPortWord.WordPort() : WordPortFake.FakeDoc.fromPackage(pkg));
-    A.times = (saved && saved.times) || {}; A.reports = (saved && saved.reports) || [];
+    A.times = (saved && saved.times) || {};
+    A.reports = A.inWord ? await allReports((saved && saved.reports) || []) : ((saved && saved.reports) || []);
     A.port.highlightHeadings = A.settings.hl;
     A.S = new C.Session(A.port, pkg, { log: (saved && saved.log) || {} });
     A.P = A.S.P;
@@ -37,20 +39,33 @@
     const first = A.order.find((id) => NEED.has(st(id))) || A.order[0];
     if (first) go(first); else empty('אין פריטים בחבילה');
     window.addEventListener('resize', () => { if (A.pid) { const c = A.cur; A.pid = null; go(c); } });
+    A.started = true;
     if (A.inWord) { clearInterval(A.saveT); A.saveT = setInterval(save, 2000); save(); }
+  }
+  /* הדיווחים משותפים לכל החבילות: נאספים מכל מה שנשמר אי פעם (גם מגרסה 0.5 ששמרה אותם לפי חבילה) */
+  async function allReports(extra) {
+    let all = [];
+    try { all = (await DB.get('reports')) || []; } catch (e) { /* */ }
+    try { for (const v of await DB.values()) if (v && Array.isArray(v.reports)) all = all.concat(v.reports); } catch (e) { /* */ }
+    all = all.concat(extra || []);
+    const seen = new Set(), out = [];
+    for (const r of all) { const k = r.time + '|' + r.note; if (!seen.has(k)) { seen.add(k); out.push(r); } }
+    out.sort((a, b) => (a.time < b.time ? -1 : 1));
+    return out;
   }
   // ───────── שמירה ב-IndexedDB (החבילה + היומן), כדי שבפתיחה הבאה של Word העבודה תימשך
   const DB = {
     open() { return new Promise((ok, no) => { try { const r = indexedDB.open('review-pane', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); } catch (e) { no(e); } }); },
     async get(k) { const db = await DB.open(); return new Promise((ok, no) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => no(q.error); }); },
+    async values() { const db = await DB.open(); return new Promise((ok, no) => { const q = db.transaction('kv').objectStore('kv').getAll(); q.onsuccess = () => ok(q.result || []); q.onerror = () => no(q.error); }); },
     async put(k, v) { const db = await DB.open(); return new Promise((ok, no) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = () => ok(); t.onerror = () => no(t.error); }); },
   };
   const pkgKey = (pk) => 'log:' + pk.siman + ':' + pk.round + ':' + (pk.built || '');
   async function save() {
-    if (!A.S) return;
-    const pk = A.P.pkg, rec = { log: A.S.log, times: A.times, reports: A.reports };
-    const j = JSON.stringify(rec); if (j === A.savedJ) return;
-    try { await DB.put(pkgKey(pk), rec); if (!A.savedPkg) { await DB.put('cur', pk); A.savedPkg = true; } A.savedJ = j; } catch (e) { A.saveErr = e.message; }
+    if (!A.S || !A.started) return;
+    const pk = A.P.pkg, rec = { log: A.S.log, times: A.times };
+    const j = JSON.stringify(rec) + A.reports.length; if (j === A.savedJ) return;
+    try { await DB.put(pkgKey(pk), rec); await DB.put('reports', A.reports); if (!A.savedPkg) { await DB.put('cur', pk); A.savedPkg = true; } A.savedJ = j; } catch (e) { A.saveErr = e.message; }
   }
   async function loadPkg(pkg) {
     // חבילה חדשה מחליפה את הנוכחית; היומן של כל חבילה נשמר בנפרד ולא נמחק
@@ -505,7 +520,7 @@
         state: A.cur ? st(A.cur) : null, pid: A.pid, recent: A.hist.slice(-6), diag: A.port.diag ? A.port.diag.slice(-12) : [] });
       save(); screen('more', 'הדיווח נשמר (' + A.reports.length + ').');
     });
-    on('repExp', () => download(`דיווחים - סימן ${pk.siman} - סבב ${pk.round}.json`, JSON.stringify({ reports: A.reports }, null, 1)));
+    on('repExp', () => download(`דיווחים על התוסף - ${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ reports: A.reports }, null, 1)));
     const setT = (id, k) => { const el = $(id); if (el) el.onchange = () => { A.settings[k] = el.checked; try { localStorage.setItem('review-pane-settings', JSON.stringify(A.settings)); } catch (e) { /* */ } if (A.port) A.port.highlightHeadings = A.settings.hl; if (k === 'mark' && !el.checked && A.port.mark) A.port.mark(null).catch(() => {}); }; };
     setT('setHl', 'hl'); setT('setMark', 'mark');
     on('bulkP', arm('p', true)); on('bulkA', arm('a', false));
