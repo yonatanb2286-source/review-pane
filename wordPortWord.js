@@ -314,6 +314,7 @@
                 const P = e.start === 0 ? rawPoint(M, c0, 'before') : rawPoint(M, c0, 'after');
                 const pt = await this._point(ctx, p, M, P, at);
                 const ins0 = pt.insertText(e.text, 'Start'); await ctx.sync();
+                await this._style(ctx, ins0, e.runs);
                 await this._mm(ctx, ins0);
                 return true;
               }
@@ -322,6 +323,7 @@
               await this._guard(ctx, rng);
               const ins1 = e.text ? rng.insertText(e.text, 'Replace') : (rng.delete(), null);
               await ctx.sync();
+              if (ins1) await this._style(ctx, ins1, e.runs);
               await this._mm(ctx, ins1);
               return true;
             }
@@ -402,12 +404,26 @@
         if (!key) return;
         const { p } = await this._para(ctx, key);
         const M = await this._map(ctx, p);
-        let a, b;
-        if (from === undefined || !M.toks.length) { a = 0; b = Math.min(M.raw.length, 1); }
-        else { const sp = tokSpan(M, Math.min(from, M.toks.length - 1), Math.min(to, M.toks.length - 1)); a = sp.a; b = sp.b; }
-        const r = p.insertAnnotations({ critiques: [{ colorScheme: 'Lavender', start: a, length: Math.max(1, b - a) }] });
-        await ctx.sync();
-        this.markIds = r.value || [];
+        if (!M.toks.length) return;
+        const f = Math.min(from === undefined ? 0 : from, M.toks.length - 1), t = Math.min(to === undefined ? f : to, M.toks.length - 1);
+        // מיקומי ה-annotation נספרים בטקסט הנקי (בלי מחוק במעקב) או ב-raw, לפי הגרסה: מנסים את שניהם ובודקים מה סומן בפועל
+        const cs = M.toks[f].cs, ce = M.toks[t].ce, want = M.clean.slice(cs, ce);
+        const sp = tokSpan(M, f, t);
+        const tries = [[cs, ce - cs]]; if (sp && sp.a !== cs) tries.push([sp.a, sp.b - sp.a]);
+        for (const [a, len] of tries) {
+          const r = p.insertAnnotations({ critiques: [{ colorScheme: 'Lavender', start: a, length: Math.max(1, len) }] });
+          await ctx.sync();
+          const ids = r.value || [];
+          let ok = false;
+          try {
+            const rg = ids.length ? ctx.document.getAnnotationById(ids[0]).critiqueAnnotation.range : null;
+            if (rg) { rg.load('text'); await ctx.sync(); ok = rg.text.replace(/\s+/g, ' ').trim() === want.replace(/\s+/g, ' ').trim(); }
+          } catch (e) { ok = false; }
+          if (ok) { this.markIds = ids; return; }
+          for (const id of ids) { try { ctx.document.getAnnotationById(id).delete(); } catch (e) { /* */ } }
+          await ctx.sync().catch(() => {});
+        }
+        this._d('סימון ב-Word: המקום לא אומת, לא סומן');
       }).catch((e) => this._d('סימון ב-Word נכשל: ' + e.message));
     }
     async getCursorParagraph() {

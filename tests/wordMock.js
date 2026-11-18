@@ -93,6 +93,17 @@ class PP {
     return new PP(d, np).load();
   }
   select() { this.doc.sel = this.getRange('Start'); }
+  /* הערות עריכה (critique): המיקומים נספרים בטקסט הנקי, כמו שנראה ב-Word */
+  insertAnnotations(o) {
+    const d = this.doc, p = this.p, vis = []; p.chars.forEach((x, k) => { if (!x.del) vis.push(k); });
+    const ids = o.critiques.map((c) => {
+      const a = vis[c.start], b = vis[c.start + c.length - 1];
+      const id = 'A' + uid++; d.annots = d.annots || {};
+      d.annots[id] = a === undefined || b === undefined ? null : mk(d, p, a, p, b + 1);
+      return id;
+    });
+    return { value: ids };
+  }
 }
 function install(doc) {
   const ctx = {
@@ -100,12 +111,13 @@ function install(doc) {
       load() {}, get changeTrackingMode() { return doc.mode; }, set changeTrackingMode(v) { doc.mode = v; },
       body: { get paragraphs() { return coll(doc.paras.map((p) => new PP(doc, p))); }, getRange(loc) { const L = doc.paras[doc.paras.length - 1]; return mk(doc, L, L.chars.length); } },
       getParagraphByUniqueLocalId(id) { const p = doc.paras.find((x) => x.id === id); if (!p) throw new Error('ItemNotFound'); return new PP(doc, p).load(); },
+      getAnnotationById(id) { const r = doc.annots && doc.annots[id]; return { critiqueAnnotation: { get range() { if (!r) throw new Error('ItemNotFound'); return r; } }, delete() { if (doc.annots) delete doc.annots[id]; } }; },
       getSelection() { const s = doc.sel; return { paragraphs: coll([new PP(doc, s ? s.p0 : doc.paras[0])]) }; },
     },
     sync: async () => {},
   };
   global.Word = { run: async (fn) => fn(ctx), ChangeTrackingMode: { trackAll: 'TrackAll' } };
-  global.Office = { context: { document: { addHandlerAsync() {} } }, EventType: { DocumentSelectionChanged: 'sel' } };
+  global.Office = { context: { requirements: { isSetSupported: () => true }, document: { addHandlerAsync() {} } }, EventType: { DocumentSelectionChanged: 'sel' } };
   return ctx;
 }
 module.exports = { Doc, install, ME };

@@ -223,6 +223,13 @@
     const np = paras[pi + dir]; if (!np) return;
     showChunk(np.pid, dir > 0 ? 0 : -1);
   }
+  function shrinkImg(file) {   // תמונה לדיווח: עד 1400 פיקסלים, JPEG
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => { const im = new Image(); im.onload = () => { const k = Math.min(1, 1400 / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', 0.8)); }; im.onerror = rej; im.src = fr.result; };
+      fr.onerror = rej; fr.readAsDataURL(file);
+    });
+  }
   function flash() { const t = $('text'), p = $('sPos'); t.classList.add('turn'); p.classList.add('flash'); setTimeout(() => { t.classList.remove('turn'); p.classList.remove('flash'); }, 700); }
   function paintStates() {
     for (const el of $('text').querySelectorAll('.it[data-id]')) {
@@ -257,7 +264,24 @@
     }
     if (needOnly) { renderAll(); }
   }
-  function advance() { if (left()) step(1, true); else renderAll(); }
+  // אחרי החלטה: רק קדימה. אם לא נשאר פתוח בהמשך, לא קופצים להתחלה
+  function advance() {
+    if (!left()) return renderAll();
+    const i = A.pos.get(A.cur);
+    for (let j = i + 1; j < A.order.length; j++) if (NEED.has(st(A.order[j]))) return go(A.order[j]);
+    A.msg = 'אין עוד פריטים פתוחים מכאן ועד סוף הסימן. נשארו ' + left() + ' פתוחים לפני כן ("הבא" ימשיך מההתחלה).'; renderAll();
+  }
+  // מעבר לפסקה שבה הסמן של Word עומד עכשיו
+  async function toCursor() {
+    const key = A.port.getCursorParagraph ? await A.port.getCursorParagraph() : null;
+    const pid = key && [...A.S.S.match.map.entries()].find(([, m]) => m.keys && m.keys.includes(key));
+    if (!pid) { A.msg = 'הסמן ב-Word אינו בפסקה של הסימן שנטען'; return renderDet(); }
+    A.lastCur = key;
+    const ids = A.order.filter((id) => item(id).pid === pid[0]);
+    const nid = ids.find((id) => NEED.has(st(id))) || ids[0];
+    if (nid) return go(nid, true);
+    showChunk(pid[0], 0);
+  }
   function renderAll() { paintStates(); renderStatus(); renderDet(); renderBtns(); }
 
   // ───────── שורת מצב
@@ -431,6 +455,7 @@
   $('bNext').onclick = () => step(1);
   $('bNote').onclick = () => { A.mode = 'note'; renderDet(); };
   $('bList').onclick = () => screen('list');
+  $('bCur').onclick = () => toCursor();
   $('bPgUp').onclick = () => page(-1);
   $('bPgDn').onclick = () => page(1);
   $('bMore').onclick = () => screen('more');
@@ -468,6 +493,7 @@
       h += `<h2>עוד ${back}</h2>
         <div class="box"><b>דיווח על בעיה או בקשה</b><div class="hint">נרשם יחד עם המקום שבו אתה עומד ועם הפעולות האחרונות של החלונית.</div>
           <textarea id="repT" dir="rtl" style="width:100%;height:60px" placeholder="מה קרה, או מה היית רוצה"></textarea>
+          <div class="row"><label class="hint" style="cursor:pointer;text-decoration:underline"><input type="file" id="repImg" accept="image/*" multiple hidden>צירוף תמונה</label> <span class="hint">(או הדבקה בתיבה עם Ctrl+V)</span> <span id="repImgN" class="hint">${A.repImgs && A.repImgs.length ? A.repImgs.length + ' תמונות מצורפות' : ''}</span></div>
           <div class="row"><button id="repOk">שמור דיווח</button><button id="repExp" ${A.reports.length ? '' : 'disabled'}>ייצוא כל הדיווחים (${A.reports.length})</button></div><div id="repMsg" class="hint"></div></div>
         <div class="box"><b>הגדרות</b>
           <label class="hint" style="display:block"><input type="checkbox" id="setHl" ${A.settings.hl ? 'checked' : ''}> הזרחה צהובה לכותרת צד שנכתבת</label>
@@ -517,9 +543,17 @@
       const t = $('repT').value.trim(); if (!t) return;
       const it = A.cur && item(A.cur);
       A.reports.push({ time: new Date().toISOString(), note: t, version: window.PANE_VERSION, siman: pk.siman, round: pk.round, item: A.cur || null, kind: it ? it.kind : null, op: it ? it.op : null,
-        state: A.cur ? st(A.cur) : null, pid: A.pid, recent: A.hist.slice(-6), diag: A.port.diag ? A.port.diag.slice(-12) : [] });
+        state: A.cur ? st(A.cur) : null, pid: A.pid, recent: A.hist.slice(-6), diag: A.port.diag ? A.port.diag.slice(-12) : [], images: (A.repImgs || []).slice() });
+      A.repImgs = [];
       save(); screen('more', 'הדיווח נשמר (' + A.reports.length + ').');
     });
+    const addImgs = async (files) => {
+      A.repImgs = A.repImgs || [];
+      for (const f of files) { if (f && /^image\//.test(f.type)) { try { A.repImgs.push(await shrinkImg(f)); } catch (e) { /* */ } } }
+      const n = $('repImgN'); if (n) n.textContent = A.repImgs.length ? A.repImgs.length + ' תמונות מצורפות' : '';
+    };
+    { const el = $('repImg'); if (el) el.onchange = () => addImgs([...el.files]); }
+    { const el = $('repT'); if (el) el.onpaste = (ev) => { const fs = [...((ev.clipboardData && ev.clipboardData.items) || [])].filter((x) => x.kind === 'file').map((x) => x.getAsFile()); if (fs.length) { ev.preventDefault(); addImgs(fs); } }; }
     on('repExp', () => download(`דיווחים על התוסף - ${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ reports: A.reports }, null, 1)));
     const setT = (id, k) => { const el = $(id); if (el) el.onchange = () => { A.settings[k] = el.checked; try { localStorage.setItem('review-pane-settings', JSON.stringify(A.settings)); } catch (e) { /* */ } if (A.port) A.port.highlightHeadings = A.settings.hl; if (k === 'mark' && !el.checked && A.port.mark) A.port.mark(null).catch(() => {}); }; };
     setT('setHl', 'hl'); setT('setMark', 'mark');
