@@ -130,22 +130,6 @@ async function run(pkg, d, order) {
       const it = pkg.items.find((i) => ['suffix', 'replace', 'insert_after'].includes(i.op)); if (!it) return 'אין פריט מתאים'; const r = await S.approve(it.id);
       assert.ok(!r.ok && d.ops === 0, 'נכתב בלי מעקב');
     });
-    await test(`${name}: סימון ב-Word מסמן את המילים הנכונות גם בפסקה עם מחיקות`, async () => {
-      const d = build(pkg, true); const { S, port } = await run(pkg, d, []);
-      const its = pkg.items.filter((i) => i.op === 'replace' && i.old.trim() && S.state(i.id).loc).slice(0, 20);
-      let n = 0;
-      for (const it of its) {
-        const s = S.state(it.id); await port.mark(s.loc.key, s.loc.from, s.loc.to);
-        const ids = port.markIds || []; assert.strictEqual(ids.length, 1, 'לא סומן: ' + port.diag.slice(-1));
-        const r = d.annots[ids[0]]; const P = r.p0;
-        const got = P.chars.slice(r.a, r.b).filter((x) => !x.del).map((x) => x.c).join('');
-        const want = S.live.find((q) => q.key === s.loc.key).tokens.slice(s.loc.from, s.loc.to + 1).join(' ');
-        assert.strictEqual(got.replace(/\s+/g, ' '), want, 'סומן מקום אחר'); n++;
-      }
-      await port.mark(null); assert.strictEqual(Object.keys(d.annots || {}).length, 0, 'הסימון הקודם לא נמחק');
-      assert.strictEqual(d.ops, 0, 'סימון כתב משהו');
-      return n + ' סימונים';
-    });
     await test(`${name}: מראה מקום שנכתב בתוך תיבה מקבל סגנון מ"מ`, async () => {
       const d = build(pkg, false); const { S } = await run(pkg, d);
       const big = (r) => r.char_style === '8_מ"מ' && r.text.trim().length >= 4;
@@ -161,7 +145,11 @@ async function run(pkg, d, order) {
         }
       }
       assert.strictEqual(bad.length, 0, bad.slice(0, 5).join(' | '));
-      return ok + ' מראי מקום';
+      // (??) שנכתב: בסגנון מ"מ
+      let qq = 0;
+      for (const P of siman(d)) { const vis = P.chars.filter((x) => !x.del), t = vis.map((x) => x.c).join(''); let k = -1;
+        while ((k = t.indexOf('(??)', k + 1)) >= 0) { const ch = vis.slice(k, k + 4); if (ch.every((x) => x.add === ME)) { qq++; assert.ok(ch.every((x) => x.cstyle === '8_מ"מ'), '(??) בלי מ"מ'); } } }
+      return ok + ' מראי מקום, ' + qq + ' (??)';
     });
     await test(`${name}: בחירה ובחירה רחבה`, async () => {
       const d = build(pkg, true); const { S, port } = await run(pkg, d, []);

@@ -513,8 +513,10 @@
         edit = planTokenEdit(s.loc.key, s.loc.from, cur, tgt);
         if (!edit) return { ok: false, why: 'לא חושבה כתיבה' };
         if (edit.kind !== 'tokenEdit' && edit.kind !== 'deleteTokens') edit.runs = pickRuns(it, edit.text, custom);
-        else if (edit.kind === 'tokenEdit' && custom === undefined && edit.text) {   // למשל מראה מקום שנכתב בתוך תיבה: סגנון התו של מה שנכתב
-          const rs = (it.runs || []).filter((r) => r.char_style && r.text.trim() && edit.text.includes(r.text.trim())).map((r) => ({ text: r.text.trim(), char_style: r.char_style }));
+        if (custom === undefined && edit.text && edit.kind !== 'deleteTokens' && !(edit.runs || []).some((r) => r.char_style)) {
+          // מה שנכתב יכול לכלול טקסט של פריט אחר באשכול (למשל ר"ת ומראה מקום צמודים): סגנונות התו של כל פריטי האשכול
+          const rs = c.items.flatMap((iid) => (P.items.get(iid).runs || []))
+            .filter((r) => r.char_style && r.text.trim() && edit.text.includes(r.text.trim())).map((r) => ({ text: r.text.trim(), char_style: r.char_style }));
           if (rs.length) edit.runs = rs;
         }
         expect = tgt.map(canon).join(' ');

@@ -34,7 +34,7 @@ const pkg = JSON.parse(fs.readFileSync(PK, 'utf8'));
   const st2 = await p.evaluate(() => document.getElementById('sTitle').innerText + ' | ' + document.getElementById('sLeft').innerText + ' | screen hidden=' + document.getElementById('screen').hidden);
   console.log('4. אחרי פתיחה מחדש (IndexedDB):', st2);
   await p.click('#bMore'); await p.fill('#repT', 'בדיקה'); await p.click('#repOk'); await p.waitForTimeout(300);
-  console.log('5. דיווחים (ישן + חדש):', await p.evaluate(() => window.__pane.reports.map((r) => r.note).join(' / ')), '| הגדרות:', await p.evaluate(() => !!document.getElementById('setHl') && !!document.getElementById('setMark')));
+  console.log('5. דיווחים (ישן + חדש):', await p.evaluate(() => window.__pane.reports.map((r) => r.note).join(' / ')), '| הגדרות:', await p.evaluate(() => !!document.getElementById('setHl') && !!document.getElementById('repExp')));
   console.log('שגיאות:', errs.length ? errs : 'אין');
   await b.close();
 })();

@@ -199,8 +199,15 @@
     }
     /* אחרי כתיבה של "אחר": מה שבסוגריים בטקסט שנכתב מקבל סגנון מ"מ */
     async _mm(ctx, rng) {
-      if (!this.mmParens || !rng) return;
+      if (!rng) return;
       rng.load('text'); await ctx.sync();
+      // (??) שנכתב: תמיד בסגנון מ"מ, ובהזרחה צהובה כמו כותרת צד (כדי לעבור עליהם אחר כך)
+      if (String(rng.text).includes('(??)')) {
+        const res = rng.search('(??)', { matchCase: true, matchWildcards: false }); res.load('items'); await ctx.sync();
+        for (const x of res.items) { x.style = '8_מ"מ'; if (this.highlightHeadings) x.font.highlightColor = 'Yellow'; }
+        await ctx.sync();
+      }
+      if (!this.mmParens) return;
       const segs = String(rng.text).match(/\([^()]*\)/g) || [];
       for (const g of segs) {
         const res = rng.search(escSearch(g.slice(0, 250)), { matchCase: true }); res.load('items'); await ctx.sync();

@@ -13,7 +13,7 @@
   const hhmm = (iso) => { try { return new Date(iso).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
 
   const A = { S: null, P: null, port: null, order: [], pos: new Map(), cur: null, pid: null, units: null, chunks: null, chunk: -1,
-    mode: null, armed: null, times: {}, msg: null, filter: { st: 'need', kind: null }, hist: [], reports: [], settings: { hl: true, mark: true } };
+    mode: null, armed: null, times: {}, msg: null, filter: { st: 'need', kind: null }, hist: [], reports: [], repDone: new Set(), wideN: 2, settings: { hl: true, mark: true } };
   try { Object.assign(A.settings, JSON.parse(localStorage.getItem('review-pane-settings') || '{}')); } catch (e) { /* בלי הגדרות שמורות */ }
   window.__pane = A;   // לבדיקות
 
@@ -43,11 +43,19 @@
     if (A.inWord) { clearInterval(A.saveT); A.saveT = setInterval(save, 2000); save(); }
   }
   /* הדיווחים משותפים לכל החבילות: נאספים מכל מה שנשמר אי פעם (גם מגרסה 0.5 ששמרה אותם לפי חבילה) */
+  const repKey = (r) => r.time + '|' + r.note;
+  const newReps = () => A.reports.filter((r) => !(A.repDone || new Set()).has(repKey(r)));
   async function allReports(extra) {
+    try {
+      const ex = await DB.get('reportsExported');
+      A.repDone = new Set(ex || []);
+      A.repSeed = !ex;     // לפני 0.5.3 לא נרשם מה יוצא: כל מה שנכתב עד הייצוא של 22.11 כבר נשלח
+    } catch (e) { A.repDone = new Set(); }
     let all = [];
     try { all = (await DB.get('reports')) || []; } catch (e) { /* */ }
     try { for (const v of await DB.values()) if (v && Array.isArray(v.reports)) all = all.concat(v.reports); } catch (e) { /* */ }
     all = all.concat(extra || []);
+    if (A.repSeed) { all.forEach((r) => { if (r.time < '2026-11-22T13:30:00Z') A.repDone.add(r.time + '|' + r.note); }); A.repSeed = false; try { await DB.put('reportsExported', [...A.repDone]); } catch (e) { /* */ } }
     const seen = new Set(), out = [];
     for (const r of all) { const k = r.time + '|' + r.note; if (!seen.has(k)) { seen.add(k); out.push(r); } }
     out.sort((a, b) => (a.time < b.time ? -1 : 1));
@@ -180,7 +188,7 @@
   // ───────── מעבר לפריט
   function go(id, fromCursor) {
     const it = item(id); if (!it) return;
-    A.mode = null; A.msg = null;
+    A.mode = null; A.msg = null; A.wideN = 2;
     if (A.pid !== it.pid) {
       A.pid = it.pid;
       const b = buildUnits(A.P.paras.get(it.pid));
@@ -242,7 +250,6 @@
     A.selfMove = Date.now(); A.lastCur = s.loc.key;
     const from = s.loc.from !== undefined ? s.loc.from : s.loc.token, to = s.loc.from !== undefined ? Math.max(s.loc.from, s.loc.to) : s.loc.token;
     try { if (from !== undefined) await A.port.select(s.loc.key, from, to); else await A.port.selectParagraph(s.loc.key); } catch (e) { /* בחירה לא חיונית */ }
-    if (A.port.mark && A.settings.mark) A.port.mark(s.loc.key, from, to).catch(() => {});
   }
   // תזוזת סמן ב-Word על ידי יונתן (לא כזו שהחלונית גרמה)
   async function onCursor() {
@@ -339,13 +346,13 @@
       A.wide = null;
       if (it.op === 'none' && !ss.loc) cur = it.old;
       else if (it.op === 'none') {
-        const lv = A.S.S.liveByKey.get(ss.loc.key).tokens, from = Math.max(0, ss.loc.from - 2), to = Math.min(lv.length - 1, ss.loc.to + 2);
+        const lv = A.S.S.liveByKey.get(ss.loc.key).tokens, from = Math.max(0, ss.loc.from - A.wideN), to = Math.min(lv.length - 1, ss.loc.to + A.wideN);
         cur = lv.slice(from, to + 1).join(' '); A.wide = { key: ss.loc.key, from, to };
         lab = 'המקום עם המילים שסביבו. אפשר לתקן כאן, להוסיף ציון או ד"ה. רק מה שתשנה ייכתב במעקב בשמך:';
       } else if (it.cluster && ss.loc && ss.mask !== undefined) {
         // שדה רחב: ההצעה עם שתי מילים לפניה ואחריה, כדי שאפשר יהיה גם להזיז אותה
         const c = A.P.clusters.get(it.cluster), lv = A.S.S.liveByKey.get(ss.loc.key).tokens;
-        const from = Math.max(0, ss.loc.from - 2), to = Math.min(lv.length - 1, ss.loc.to + 2);
+        const from = Math.max(0, ss.loc.from - A.wideN), to = Math.min(lv.length - 1, ss.loc.to + A.wideN);
         const mid = C.splitWords(C.outcomeText(c, A.P.items, ss.mask | (1 << c.items.indexOf(it.id))));
         cur = lv.slice(from, ss.loc.from).concat(mid, lv.slice(ss.loc.to + 1, to + 1)).join(' ');
         A.wide = { key: ss.loc.key, from, to };
@@ -355,7 +362,7 @@
       if (wk && wk !== A.wideSel && A.port.select) { A.wideSel = wk; A.selfMove = Date.now(); A.port.select(A.wide.key, A.wide.from, A.wide.to).catch(() => {}); }
       h += `<div class="oth"><label>${lab}</label><textarea id="othT" dir="rtl">${esc(cur)}</textarea>
         <label class="hint"><input type="checkbox" id="othMM" ${it.kind === 'ref' ? 'checked' : ''}> מה שבסוגריים (…) ייכתב בסגנון מ"מ</label>
-        <div class="row"><button id="othOk" class="ok">כתוב</button><button id="othNo">ביטול</button></div></div>`;
+        <div class="row"><button id="othOk" class="ok">כתוב</button><button id="othNo">ביטול</button>${A.wide ? `<button id="othWide" title="עוד מילים לפני ואחרי (מבטל מה שהקלדת בשדה)">הרחב את השדה</button>` : ''}</div></div>`;
     } else if (A.mode === 'note') {
       h += `<div class="rnote"><label class="hint">${it.op === 'none' ? 'מה החלטת (נכנס לקובץ ההחלטות):' : 'סיבת הדחייה (לא חובה):'}</label><textarea id="noteT" dir="rtl">${esc((A.S.log[A.cur] || {}).why || '')}</textarea>
         <div class="row"><button id="noteOk">${it.op === 'none' ? 'ראיתי, עם הערה' : 'דחה עם הערה'}</button><button id="noteNo">ביטול</button></div></div>`;
@@ -375,6 +382,7 @@
     }
     box.innerHTML = h; box.scrollTop = 0;
     const t = $('othT') || $('noteT'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+    if ($('othWide')) $('othWide').onclick = () => { A.wideN = Math.min(30, A.wideN + 5); renderDet(); };
     if ($('othOk')) { $('othOk').onclick = () => doOther($('othT').value); $('othNo').onclick = () => { A.mode = null; renderDet(); renderBtns(); }; }
     if ($('noteOk')) { $('noteOk').onclick = () => (it.op === 'none' ? doSeen($('noteT').value) : doReject($('noteT').value)); $('noteNo').onclick = () => { A.mode = null; renderDet(); }; }
     moreHint();
@@ -494,10 +502,9 @@
         <div class="box"><b>דיווח על בעיה או בקשה</b><div class="hint">נרשם יחד עם המקום שבו אתה עומד ועם הפעולות האחרונות של החלונית.</div>
           <textarea id="repT" dir="rtl" style="width:100%;height:60px" placeholder="מה קרה, או מה היית רוצה"></textarea>
           <div class="row"><label class="hint" style="cursor:pointer;text-decoration:underline"><input type="file" id="repImg" accept="image/*" multiple hidden>צירוף תמונה</label> <span class="hint">(או הדבקה בתיבה עם Ctrl+V)</span> <span id="repImgN" class="hint">${A.repImgs && A.repImgs.length ? A.repImgs.length + ' תמונות מצורפות' : ''}</span></div>
-          <div class="row"><button id="repOk">שמור דיווח</button><button id="repExp" ${A.reports.length ? '' : 'disabled'}>ייצוא כל הדיווחים (${A.reports.length})</button></div><div id="repMsg" class="hint"></div></div>
+          <div class="row"><button id="repOk">שמור דיווח</button><button id="repExp" ${newReps().length ? '' : 'disabled'}>ייצוא דיווחים חדשים (${newReps().length})</button></div><div id="repMsg" class="hint"></div></div>
         <div class="box"><b>הגדרות</b>
-          <label class="hint" style="display:block"><input type="checkbox" id="setHl" ${A.settings.hl ? 'checked' : ''}> הזרחה צהובה לכותרת צד שנכתבת</label>
-          <label class="hint" style="display:block"><input type="checkbox" id="setMark" ${A.settings.mark ? 'checked' : ''}> סימון המקום בתוך Word בקו תחתון צבעוני (לא נשמר בקובץ)</label></div>
+          <label class="hint" style="display:block"><input type="checkbox" id="setHl" ${A.settings.hl ? 'checked' : ''}> הזרחה צהובה לכותרת צד ול-(??) שנכתבים</label></div>
         ${A.port && A.port.diag ? `<div class="box"><b>דוח אבחון</b> <span class="hint">(להעתקה לשיחה אם משהו לא עבד)</span><textarea readonly style="width:100%;height:90px" dir="rtl">${esc(A.port.diag.join('\n'))}</textarea></div>` : ''}
         <div class="box"><b>אישור מרוכז בפסקה הנוכחית</b><div class="hint">כל שינוי נכתב בנפרד במעקב. לחיצה שנייה מאשרת.</div>
         <button class="big${A.armed === 'p' ? ' arm' : ''}" id="bulkP" ${np ? '' : 'disabled'}>${A.armed === 'p' ? 'לחץ שוב לאישור: ' : ''}אשר את כל הפיסוק שנותר בפסקה (${np})</button>
@@ -554,7 +561,13 @@
     };
     { const el = $('repImg'); if (el) el.onchange = () => addImgs([...el.files]); }
     { const el = $('repT'); if (el) el.onpaste = (ev) => { const fs = [...((ev.clipboardData && ev.clipboardData.items) || [])].filter((x) => x.kind === 'file').map((x) => x.getAsFile()); if (fs.length) { ev.preventDefault(); addImgs(fs); } }; }
-    on('repExp', () => download(`דיווחים על התוסף - ${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ reports: A.reports }, null, 1)));
+    on('repExp', async () => {
+      const L = newReps(); if (!L.length) return;
+      download(`דיווחים על התוסף - ${new Date().toISOString().replace('T', ' ').slice(0, 16).replace(':', '-')}.json`, JSON.stringify({ reports: L }, null, 1));
+      L.forEach((r) => A.repDone.add(repKey(r)));
+      try { await DB.put('reportsExported', [...A.repDone]); } catch (e) { /* */ }
+      screen('more', 'יוצאו ' + L.length + ' דיווחים. בייצוא הבא ייצאו רק דיווחים חדשים.');
+    });
     const setT = (id, k) => { const el = $(id); if (el) el.onchange = () => { A.settings[k] = el.checked; try { localStorage.setItem('review-pane-settings', JSON.stringify(A.settings)); } catch (e) { /* */ } if (A.port) A.port.highlightHeadings = A.settings.hl; if (k === 'mark' && !el.checked && A.port.mark) A.port.mark(null).catch(() => {}); }; };
     setT('setHl', 'hl'); setT('setMark', 'mark');
     on('bulkP', arm('p', true)); on('bulkA', arm('a', false));

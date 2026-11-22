@@ -12,7 +12,7 @@ class Doc {
   pix(p) { return this.paras.indexOf(p); }
 }
 class Rng {
-  constructor(doc, p0, a, p1, b) { this.doc = doc; this.p0 = p0; this.a = a; this.p1 = p1 === undefined ? p0 : p1; this.b = b === undefined ? a : b; }
+  constructor(doc, p0, a, p1, b) { this.font = {}; this.doc = doc; this.p0 = p0; this.a = a; this.p1 = p1 === undefined ? p0 : p1; this.b = b === undefined ? a : b; }
   _one() { if (this.p0 !== this.p1) throw new Error('mock: טווח רב-פסקאות'); return this.p0; }
   load() { if (this.p0 === this.p1) { this.text = this.doc.raw(this.p0).slice(this.a, this.b); this._st = this._style(); } return this; }
   _style() { const ch = this.p0.chars.slice(this.a, this.b); const s = new Set(ch.map((x) => x.cstyle)); if (s.size === 1) { const v = [...s][0]; return v || this.p0.style; } return ''; }
