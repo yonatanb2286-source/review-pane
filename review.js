@@ -259,6 +259,8 @@
     A.lastCur = key;
     const pid = [...A.S.S.match.map.entries()].find(([, m]) => m.keys && m.keys.includes(key));
     if (!pid) return;
+    // באותה פסקה שבה עובדים: לא קופצים (פסקה שפוצלה היא כמה פסקאות ב-Word, וזה הקפיץ לפריטים שדילגת עליהם – קיב 22.11)
+    if (pid[0] === A.pid) return;
     const ids = A.order.filter((id) => item(id).pid === pid[0]);
     const nid = ids.find((id) => NEED.has(st(id))) || ids[0];
     if (nid && nid !== A.cur) go(nid, true);
@@ -371,7 +373,8 @@
       if (s === 'changed') h += `<div class="err">המקום נערך בקובץ: הנוסח שם אינו המקור ואינו ההצעה. "אחר" ירשום את מה שכתוב שם.</div>`;
       if (s === 'notfound') h += `<div class="err">המקום לא נמצא בוודאות בקובץ, ולכן לא ייכתב. ${esc((A.S.state(A.cur) || {}).why || '')}</div>`;
       if (s === 'blocked') h += `<div class="err">צריך לאשר קודם את הפיצול שהכותרת תלויה בו.</div>`;
-      const notes = [it.note].concat((it.notes || []).map((x) => x.text)).filter((x, i, a) => x && a.indexOf(x) === i);
+      // it.note הוא חיבור כל ההערות: כשיש הערות נפרדות מציגים רק אותן, כדי שלא ייכתב פעמיים (קיב 22.11)
+      const notes = ((it.notes || []).length ? it.notes.map((x) => x.text) : [it.note]).filter((x, i, a) => x && a.indexOf(x) === i);
       if (it.ref_check && it.ref_check.text && !notes.includes(it.ref_check.text)) notes.push(it.ref_check.text);
       if (['heading_before', 'topic'].includes(it.op)) h += `<div class="note"><b>${esc(it.new)}</b></div>`;
       notes.forEach((x) => { h += `<div class="note">${esc(x)}</div>`; });
