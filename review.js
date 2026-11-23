@@ -259,10 +259,13 @@
     A.lastCur = key;
     const pid = [...A.S.S.match.map.entries()].find(([, m]) => m.keys && m.keys.includes(key));
     if (!pid) return;
-    // באותה פסקה שבה עובדים: לא קופצים (פסקה שפוצלה היא כמה פסקאות ב-Word, וזה הקפיץ לפריטים שדילגת עליהם – קיב 22.11)
-    if (pid[0] === A.pid) return;
+    // הפריטים שנמצאים בדיוק בפסקת Word שבה הסמן (פסקה בחבילה יכולה להיות כמה פסקאות ב-Word אחרי פיצול – קיג 23.11)
     const ids = A.order.filter((id) => item(id).pid === pid[0]);
-    const nid = ids.find((id) => NEED.has(st(id))) || ids[0];
+    const atKey = ids.filter((id) => { const s = A.S.state(id); return s && s.loc && s.loc.key === key; });
+    if (atKey.includes(A.cur)) return;
+    const good = (id) => NEED.has(st(id)) && st(id) !== 'notfound';
+    // אין פריט מזוהה בפסקת הסמן: לא קופצים לשום מקום (אפשר "לסמן" או החצים)
+    const nid = atKey.find(good) || atKey[0];
     if (nid && nid !== A.cur) go(nid, true);
   }
   function step(dir, needOnly) {
@@ -287,7 +290,9 @@
     if (!pid) { A.msg = 'הסמן ב-Word אינו בפסקה של הסימן שנטען'; return renderDet(); }
     A.lastCur = key;
     const ids = A.order.filter((id) => item(id).pid === pid[0]);
-    const nid = ids.find((id) => NEED.has(st(id))) || ids[0];
+    const atKey = ids.filter((id) => { const s = A.S.state(id); return s && s.loc && s.loc.key === key; });
+    const good = (id) => NEED.has(st(id)) && st(id) !== 'notfound';
+    const nid = atKey.find(good) || atKey[0] || ids.find(good) || ids[0];
     if (nid) return go(nid, true);
     showChunk(pid[0], 0);
   }
@@ -449,8 +454,11 @@
   function warnAfter() { if (A.port.lastWarn) { A.msg = '⚠ בשינוי שנכתב עכשיו: ' + A.port.lastWarn; A.port.lastWarn = null; renderDet(); } }
   const doReopen = () => busy(async () => {
     const id = A.cur, s = st(id);
-    if (['rejected', 'seen'].includes(s)) { delete A.S.log[id]; delete A.times[id]; await A.S.refresh(); renderAll(); }
-    else { A.msg = 'השינוי הזה כבר נכתב בקובץ' + (A.times[id] ? ' (' + hhmm(A.times[id]) + ')' : '') + ', ולכן החלונית לא דוחה אותו. כדי לבטל: ב-Word לחיצה ימנית על השינוי ואז "דחה" (או Ctrl+Z מיד אחרי האישור). אחרי זה הפריט יחזור כאן ל"פתוח".'; renderDet(); }
+    if (['rejected', 'seen'].includes(s)) { delete A.S.log[id]; delete A.times[id]; await A.S.refresh(); renderAll(); return; }
+    // אולי כבר דחית ב-Word: קוראים את הקובץ מחדש לפני שאומרים שזה עדיין כתוב (קיג 23.11)
+    await A.S.refresh(item(id).pid);
+    if (!['accepted', 'other', 'applied'].includes(st(id))) { delete A.S.log[id]; delete A.times[id]; A.msg = 'הפריט נפתח מחדש (השינוי כבר לא נמצא בקובץ).'; renderAll(); }
+    else { A.msg = 'השינוי הזה כבר נכתב בקובץ' + (A.times[id] ? ' (' + hhmm(A.times[id]) + ')' : '') + ', ולכן החלונית לא דוחה אותו. כדי לבטל: ב-Word לחיצה ימנית על השינוי ואז "דחה" (או Ctrl+Z מיד אחרי האישור). אחרי זה ללחוץ כאן שוב "פתח מחדש".'; renderDet(); }
   });
   async function bulk(kindOnly) {
     const ids = A.order.filter((id) => item(id).pid === A.pid && st(id) === 'open' && item(id).op !== 'none' && (!kindOnly || item(id).kind === 'punct'));
