@@ -14,7 +14,7 @@
   'use strict';
   const SIMAN_STYLE = '1_סימן';
   const ME = 'y.m. b';
-  const CHAR_MAP = { '8_מ"מ תו': '8_מ"מ' };            // ממצא שלב 0: השם בפועל הוא 8_מ"מ (סגנון מקושר)
+  const CHAR_MAP = { '8_מ"מ תו': '8_מ"מ', 'תרגום': '9_תרגום' };            // ממצא שלב 0: השם בפועל הוא 8_מ"מ (סגנון מקושר)
   const ANCHOR = 24;
   const stripEnd = (s) => String(s == null ? '' : s).replace(/[\r\n\u0007]+$/, '');
   const normHead = (s) => String(s).replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
