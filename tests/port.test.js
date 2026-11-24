@@ -130,6 +130,27 @@ async function run(pkg, d, order) {
       const it = pkg.items.find((i) => ['suffix', 'replace', 'insert_after'].includes(i.op)); if (!it) return 'אין פריט מתאים'; const r = await S.approve(it.id);
       assert.ok(!r.ok && d.ops === 0, 'נכתב בלי מעקב');
     });
+    await test(`${name}: ביטול אישור מהחלונית מחזיר את המקור ולא נוגע בעריכה ידנית`, async () => {
+      const d = build(pkg, true); install(d); const port = new WordPort(); const S = new C.Session(port, pkg, { log: {} });
+      await S.refresh();
+      const its = pkg.items.filter((i) => i.cluster && S.state(i.id).state === 'open').slice(0, 25);
+      let n = 0;
+      for (const it of its) {
+        const s0 = S.state(it.id); if (!s0 || s0.state !== 'open') continue;
+        const P = d.paras.find((x) => x.id === s0.loc.key), before = d.clean(P);
+        const t0 = Date.now(); const r = await S.approve(it.id); if (!r.ok) continue;
+        const s1 = S.state(it.id);
+        const k = await port.undoOwn(s1.loc.key, s1.loc.from, Math.max(s1.loc.from, s1.loc.to), t0 - 1000, Date.now() + 1000);
+        assert.ok(k, 'לא בוטל: ' + port.lastError);
+        await S.refresh(); assert.strictEqual(d.clean(P), before, 'הטקסט לא חזר למקור (' + it.id + ')');
+        assert.ok(['open', 'rejected'].includes(S.state(it.id).state), 'המצב ' + S.state(it.id).state);
+        n++;
+      }
+      // שינוי ידני ישן (מחוץ לחלון הזמן) לא נדחה
+      const it = pkg.items.find((i) => i.cluster && S.state(i.id).state === 'open');
+      if (it) { const r = await S.approve(it.id); const s1 = S.state(it.id); if (r.ok) { const k = await port.undoOwn(s1.loc.key, s1.loc.from, s1.loc.to, 0, 1); assert.ok(!k, 'נדחה שינוי מחוץ לחלון הזמן'); } }
+      return n + ' ביטולים';
+    });
     await test(`${name}: מראה מקום שנכתב בתוך תיבה מקבל סגנון מ"מ`, async () => {
       const d = build(pkg, false); const { S } = await run(pkg, d);
       const big = (r) => r.char_style === '8_מ"מ' && r.text.trim().length >= 4;

@@ -42,7 +42,12 @@ class Rng {
       if (cur) out.push(cur);
     }
     const d = this.doc;
-    return coll(out.map((t) => ({ type: t.type, text: t.text, author: t.author, getRange: () => mk(d, p, Math.min(p.chars.length, t.start + (d.badTc ? 1 : 0))) })));
+    return coll(out.map((t) => {
+      const first = p.chars[t.start], date = new Date(t.type === 'Deleted' ? (first.delT || 0) : (first.t || 0));
+      const ref = p.chars.slice(t.start, t.start + t.text.length);
+      return { type: t.type, text: t.text, author: t.author, date, getRange: () => mk(d, p, Math.min(p.chars.length, t.start + (d.badTc ? 1 : 0))),
+        reject: () => { for (const x of ref) { const k = p.chars.indexOf(x); if (k < 0) continue; if (t.type === 'Added') p.chars.splice(k, 1); else { x.del = false; delete x.delBy; delete x.delT; } } d.ops++; } };
+    }));
   }
   search(s) {
     const p = this._one(), raw = this.doc.raw(p).slice(this.a, this.b), q = s.replace(/\^\^/g, '^'), res = [];
@@ -61,7 +66,7 @@ class Rng {
       return mk(d, np, 0);
     }
     const inh = pos > 0 ? p.chars[pos - 1].cstyle : null;
-    p.chars.splice(pos, 0, ...[...t].map((c) => ({ c, del: false, add: ME, cstyle: inh })));
+    const now = Date.now(); p.chars.splice(pos, 0, ...[...t].map((c) => ({ c, del: false, add: ME, cstyle: inh, t: now })));
     d.ops++;
     return mk(d, p, pos, p, pos + t.length);
   }
@@ -69,7 +74,7 @@ class Rng {
     const p = this._one(); let removed = 0;
     for (let k = this.b - 1; k >= this.a; k--) {
       const x = p.chars[k];
-      if (x.add === ME && !x.del) { if (x.mine0) this.doc.lostMine = true; p.chars.splice(k, 1); removed++; } else if (!x.del) { x.del = true; x.delBy = ME; }
+      if (x.add === ME && !x.del) { if (x.mine0) this.doc.lostMine = true; p.chars.splice(k, 1); removed++; } else if (!x.del) { x.del = true; x.delBy = ME; x.delT = Date.now(); }
     }
     this.doc.ops++; return removed;
   }

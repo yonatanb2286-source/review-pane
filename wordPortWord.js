@@ -198,7 +198,8 @@
       return M;
     }
     /* אחרי כתיבה של "אחר": מה שבסוגריים בטקסט שנכתב מקבל סגנון מ"מ */
-    async _mm(ctx, rng) {
+    async _mm(ctx, rng) { try { await this._mm0(ctx, rng); } catch (e) { this.lastWarn = 'עיצוב הסוגריים לא הוחל: ' + e.message; } }
+    async _mm0(ctx, rng) {
       if (!rng) return;
       rng.load('text'); await ctx.sync();
       // (??) שנכתב: תמיד בסגנון מ"מ, ובהזרחה צהובה כמו כותרת צד (כדי לעבור עליהם אחר כך)
@@ -254,19 +255,27 @@
       const mine = tcs.items.filter((t) => t.type === 'Added' && t.author === this.me);
       if (mine.length) throw new Error('המקום כולל הוספה שלך במעקב, והתוסף לא מוחק אותה. לעשות ב-Word ידנית');
     }
-    async _style(ctx, rng, runs, paraStyle) {
+    async _style(ctx, rng, runs, paraStyle) { try { await this._style0(ctx, rng, runs, paraStyle); } catch (e) { this.lastWarn = 'סגנון התו לא הוחל: ' + e.message; } }
+    async _style0(ctx, rng, runs, paraStyle) {
       if (!runs || !runs.length) return;
       for (const r of runs) {
         const t = String(r.text || '').trim(); if (!t) continue;
         if (r.char_style) {
+          const name = CHAR_MAP[r.char_style] || r.char_style;
+          if (name === '8_מ"מ' && !/[()[\]]/.test(t)) continue;   // מ"מ רק למראה מקום בסוגריים, לא לשבר מילה
           const res = rng.search(escSearch(t.slice(0, 250)), { matchCase: true }); res.load('items'); await ctx.sync();
-          if (res.items.length) res.items[0].style = CHAR_MAP[r.char_style] || r.char_style;
-          else this.lastWarn = 'סגנון התו לא הוחל על "' + t.slice(0, 20) + '": להחיל ב-Word';
+          if (!res.items.length) { this.lastWarn = 'סגנון התו לא הוחל על "' + t.slice(0, 20) + '": להחיל ב-Word'; continue; }
+          // סגנון שלא קיים במסמך לא מכשיל את הכתיבה (הטקסט כבר נכתב): מנסים גם את שם סגנון התו המקושר, ואחרת מזהירים
+          let ok = false;
+          for (const nm of [name, name + ' תו', name + ' Char']) {
+            try { res.items[0].style = nm; await ctx.sync(); ok = true; break; } catch (e) { /* הבא */ }
+          }
+          if (!ok) this.lastWarn = 'הסגנון "' + name + '" לא נמצא במסמך, והטקסט "' + t.slice(0, 20) + '" נכתב בלי סגנון: להחיל ב-Word';
         }
       }
-      await ctx.sync();
     }
-    async _checkInherited(ctx, rng, runs, paraStyle) {
+    async _checkInherited(ctx, rng, runs, paraStyle) { try { await this._checkInh0(ctx, rng, runs, paraStyle); } catch (e) { /* בדיקה בלבד */ } }
+    async _checkInh0(ctx, rng, runs, paraStyle) {
       if (runs && runs.some((r) => r.char_style)) return;
       rng.load('style'); await ctx.sync();
       if (rng.style && paraStyle && rng.style !== paraStyle) this.lastWarn = 'הטקסט שנכתב קיבל את הסגנון "' + rng.style + '" מהטקסט שלפניו: לבדוק ב-Word';
@@ -300,9 +309,9 @@
           if (e.kind === 'insertParagraphBefore') {
             if (index === 0) throw new Error('לא מוסיפים פסקה לפני שורת הסימן');
             const np = p.insertParagraph(e.text, 'Before');
-            np.style = CHAR_MAP[e.style] || e.style;
-            if (this.highlightHeadings && e.style === '7_כותרת-צד') np.getRange('Content').font.highlightColor = 'Yellow';
             await ctx.sync();
+            try { np.style = CHAR_MAP[e.style] || e.style; await ctx.sync(); } catch (er) { this.lastWarn = 'סגנון הפסקה "' + e.style + '" לא נמצא במסמך: להחיל ב-Word'; }
+            if (this.highlightHeadings && e.style === '7_כותרת-צד') { np.getRange('Content').font.highlightColor = 'Yellow'; await ctx.sync(); }
             await this._style(ctx, np.getRange('Content'), e.runs);
             await this._mm(ctx, np.getRange('Content'));
             return true;
@@ -432,6 +441,32 @@
         }
         this._d('סימון ב-Word: המקום לא אומת, לא סומן');
       }).catch((e) => this._d('סימון ב-Word נכשל: ' + e.message));
+    }
+    /* ביטול אישור מהחלונית: דוחה ב-Word רק שינויים במעקב של יונתן עצמו, בתיבות של הפריט (ותיבה אחת מכל צד),
+       שנוצרו בחלון הזמן של האישור. שינוי שעשה ידנית בזמן אחר לא נוגעים בו. */
+    async undoOwn(key, from, to, t0, t1) {
+      this.lastError = null;
+      try {
+        return await Word.run(async (ctx) => {
+          const { p } = await this._para(ctx, key);
+          const M = await this._map(ctx, p), n = M.toks.length;
+          if (!n) throw new Error('הפסקה ריקה');
+          const f = Math.max(0, Math.min(from, n - 1) - 1), t = Math.min(n - 1, Math.max(to, from) + 1);
+          const sp = tokSpan(M, f, t);
+          // כולל טקסט מחוק במעקב שצמוד לטווח (בהחלפה Word שם את המחוק ליד החדש)
+          const live = new Set(M.rawIdx); let a = sp.a, b = sp.b;
+          while (a > 0 && !live.has(a - 1)) a--;
+          while (b < M.raw.length && !live.has(b)) b++;
+          let rng;
+          try { rng = await this._span(ctx, p, M, a, b); } catch (e) { rng = await this._span(ctx, p, M, sp.a, sp.b); }
+          const tcs = rng.getTrackedChanges(); tcs.load('items/type,items/author,items/date'); await ctx.sync();
+          const mine = tcs.items.filter((x) => x.author === this.me && x.date && +new Date(x.date) >= t0 && +new Date(x.date) <= t1);
+          if (!mine.length) throw new Error('לא נמצא במקום שינוי שהחלונית כתבה בזמן האישור');
+          mine.forEach((x) => x.reject()); await ctx.sync();
+          this._d('↶ בוטלו ' + mine.length + ' שינויים');
+          return mine.length;
+        });
+      } catch (e) { return this._fail(e.message); }
     }
     async getCursorParagraph() {
       return Word.run(async (ctx) => {

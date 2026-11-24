@@ -406,7 +406,7 @@
     if (it.op === 'none' && (s === 'info' || s === 'open')) r.innerHTML = `<button class="seen" id="bSeen">${isRef ? 'המקור תקין' : 'ראיתי'}</button><button class="ot" id="bOt"${(A.S.state(A.cur) || {}).loc && A.trackOn ? '' : ' disabled'}>אחר</button>`;
     else if (['accepted', 'rejected', 'other', 'seen', 'na'].includes(s)) {
       const tm = A.times[A.cur] || lg.time;
-      r.innerHTML = `<div class="done ${s}">${s === 'seen' && lg.verdict ? 'המקור תקין' : STATE[s]}${tm ? ' · ' + hhmm(tm) : ''}</div><button class="reo" id="bReo">פתח מחדש</button>`;
+      r.innerHTML = `<div class="done ${s}">${s === 'seen' && lg.verdict ? 'המקור תקין' : STATE[s]}${tm ? ' · ' + hhmm(tm) : ''}</div><button class="reo" id="bReo">${['accepted', 'other'].includes(s) && it.cluster ? 'בטל' : 'פתח מחדש'}</button>`;
     } else {
       const canOk = s === 'open';
       r.innerHTML = `<button class="ok" id="bOk"${canOk && A.trackOn ? '' : ' disabled'}>אישור</button><button class="no" id="bNo">דחייה</button><button class="ot" id="bOt"${(s === 'open' || s === 'changed') && A.trackOn ? '' : ' disabled'}>אחר</button>`;
@@ -458,7 +458,22 @@
     // אולי כבר דחית ב-Word: קוראים את הקובץ מחדש לפני שאומרים שזה עדיין כתוב (קיג 23.11)
     await A.S.refresh(item(id).pid);
     if (!['accepted', 'other', 'applied'].includes(st(id))) { delete A.S.log[id]; delete A.times[id]; A.msg = 'הפריט נפתח מחדש (השינוי כבר לא נמצא בקובץ).'; renderAll(); }
-    else { A.msg = 'השינוי הזה כבר נכתב בקובץ' + (A.times[id] ? ' (' + hhmm(A.times[id]) + ')' : '') + ', ולכן החלונית לא דוחה אותו. כדי לבטל: ב-Word לחיצה ימנית על השינוי ואז "דחה" (או Ctrl+Z מיד אחרי האישור). אחרי זה ללחוץ כאן שוב "פתח מחדש".'; renderDet(); }
+    else {
+      // ביטול מהחלונית: רק מה שהחלונית כתבה בזמן האישור הזה, במקום של הפריט (פריטי מילים ופיסוק)
+      const it = item(id), s2 = A.S.state(id) || {}, tm = A.times[id] || (A.S.log[id] || {}).time;
+      if (it.cluster && s2.loc && tm && A.port.undoOwn) {
+        const t = +new Date(tm);
+        const n = await A.port.undoOwn(s2.loc.key, s2.loc.from, Math.max(s2.loc.from, s2.loc.to), t - 6000, t + 2000);
+        hist(id, 'ביטול', n ? { ok: true } : { ok: false, why: A.port.lastError });
+        if (n) {
+          await A.S.refresh(it.pid);
+          if (['open', 'changed'].includes(st(id))) { delete A.S.log[id]; delete A.times[id]; A.msg = 'האישור בוטל, והשינוי נדחה ב-Word.'; return renderAll(); }
+          A.msg = 'נדחו ב-Word ' + n + ' שינויים, אבל הפריט עדיין לא חזר למקור. לבדוק ב-Word.'; return renderAll();
+        }
+        A.msg = 'לא בוטל: ' + (A.port.lastError || '') + '. אפשר לדחות ב-Word: לחיצה ימנית על השינוי ואז "דחה".'; return renderDet();
+      }
+      A.msg = 'את השינוי הזה (פסקה, כותרת או פיצול) החלונית לא מבטלת. כדי לבטל: ב-Word לחיצה ימנית על השינוי ואז "דחה", ואחר כך "פתח מחדש" כאן.'; renderDet();
+    }
   });
   async function bulk(kindOnly) {
     const ids = A.order.filter((id) => item(id).pid === A.pid && st(id) === 'open' && item(id).op !== 'none' && (!kindOnly || item(id).kind === 'punct'));

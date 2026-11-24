@@ -171,7 +171,7 @@
   }
 
   /* outcomes: מערכי תיבות אפשריים. מחזיר {pos, len, mask} או null. pos/len בתוך seq. */
-  function locate(seq, ctxB, ctxA, outcomes, expectedFrac) {
+  function locate(seq, ctxB, ctxA, outcomes, expectedFrac, ord) {
     const nz = [];                     // אינדקסים בעלי ערך מנורמל
     seq.forEach((x, i) => { if (x.n) nz.push(i); });
     const nzVals = nz.map((i) => seq[i].n);
@@ -216,10 +216,25 @@
     const best = all[0];
     if (best.score < need) return null;                       // אין די הקשר: לא כותבים
     if (best.strict < 1 && cb.length + ca.length > 0) return null;   // חייבת להיות תיבה צמודה תואמת לפחות מצד אחד
-    const rivals = all.slice(1).filter((c) => c.score >= best.score - 1);
-    if (rivals.length && !(best.strict >= 2 && rivals.every((c) => c.strict <= best.strict - 2))) return null;   // דו-משמעי
+    let rivals = all.slice(1).filter((c) => c.score >= best.score - 1);
+    // טקסט חוזר (למשל מילים כפולות שההצעה מוחקת): מועמד שכולו בתוך מועמד אחר שמסתיים או מתחיל באותו מקום
+    // הוא אותו מקום. המועמד הארוך מסביר את כל התיבות, ולהקשר של הקצר אין משמעות.
+    const inside = (a, b) => a !== b && a.startSeq >= b.startSeq && a.endSeq <= b.endSeq && (a.startSeq === b.startSeq || a.endSeq === b.endSeq) && b.strict >= a.strict;
+    let top = [best, ...rivals];
+    top = top.filter((a) => !top.some((b) => inside(a, b)));
+    if (top.length === 1) return top[0];
+    let b0 = top[0]; rivals = top.slice(1);
+    const fullCtx = cb.length + ca.length >= 5 && b0.strict === cb.length + ca.length && b0.exact && rivals.every((c) => c.strict < b0.strict);
+    if (rivals.length && !fullCtx && !(b0.strict >= 2 && rivals.every((c) => c.strict <= b0.strict - 2))) {
+      // אותו הקשר בכמה מקומות בפסקה: לפי הסדר. רק כשמספר המקומות בטקסט החי שווה למספרם במקור
+      if (ord && ord.n > 1) {
+        const full = top.filter((c) => c.strict === b0.strict && c.score === b0.score).sort((a, b) => a.startSeq - b.startSeq);
+        if (full.length === top.length && full.length === ord.n) return full[ord.k];
+      }
+      return null;   // דו-משמעי
+    }
     void expectedFrac;
-    return best;
+    return b0;
   }
 
   /* איתור לפי ההקשר בלבד, כשהטקסט במקום אינו אף אחת מהאפשרויות (עריכה של יונתן, "אחר").
@@ -271,10 +286,18 @@
           const l = locate(seq, p.orig_tokens.slice(Math.max(0, t - 3), t), p.orig_tokens.slice(t + 1, t + 4), [[p.orig_tokens[t]]], t / ntok);
           return l && l.exact ? l.startSeq : null;
         };
+        const ordOf = (c) => {     // המקום הזה הוא ה-k מתוך n מופעים של אותו הקשר+מקור בפסקה המקורית
+          const pat = c.ctx_before.concat(c.outcomes[0], c.ctx_after).map(norm).filter(Boolean);
+          const ot = p.orig_tokens.map(norm), ix = []; ot.forEach((x, i) => { if (x) ix.push(i); });
+          const v = ix.map((i) => ot[i]), own = c.from - c.ctx_before.length;
+          let n = 0, k = -1;
+          for (let s = 0; s + pat.length <= v.length; s++) if (pat.every((x, j) => v[s + j] === x)) { if (ix[s] === own || (k < 0 && ix[s] > own)) k = n; n++; }
+          return k >= 0 && n > 1 ? { k, n } : null;
+        };
         for (const c of (P.clustersOf.get(p.pid) || [])) {
           // נוסח "אחר" שנרשם ביומן הוא אפשרות נוספת במקום (אחרת תוצאה קצרה יותר, למשל המקור, עלולה להיתפס כקידומת שלו)
           const extra = c.items.map((iid) => this.log[iid]).filter((l) => l && l.state === 'other' && l.span).map((l) => splitWords(l.span));
-          let loc = locate(seq, c.ctx_before, c.ctx_after, c.outcomes.concat(extra), c.from / ntok);
+          let loc = locate(seq, c.ctx_before, c.ctx_after, c.outcomes.concat(extra), c.from / ntok, ordOf(c));
           if (!loc) loc = locateBetween(seq, c.ctx_before, c.ctx_after, c.outcomes[0].length + 6);   // נוסח אחר במקום (של יונתן)
           clLoc.set(c.cid, loc);
           if (!loc) { c.items.forEach((iid) => st.set(iid, { state: 'notfound', why: 'המקום לא נמצא בוודאות' })); continue; }
@@ -291,6 +314,14 @@
             if (mask >= 0) {
               const on = !!(mask >> k & 1);
               let s = on ? 'accepted' : 'open';
+              // יונתן שינה את התיבה הצמודה בצד שבו הפריט כותב (למשל כתב ציון אחר במקום ההצעה):
+              // לא כותבים לידה. "השתנה בקובץ", ו"אחר" רושם את מה שכתוב בקובץ
+              const op = P.items.get(iid).op;
+              if (!on && ((loc.sa === 0 && c.ctx_after.length && op === 'insert_after') || (loc.sb === 0 && c.ctx_before.length && op === 'insert_before'))) {
+                const near = seq.slice(Math.max(0, loc.startSeq - 2), Math.min(seq.length, loc.endSeq + 2)).filter((x) => x.key === where.key);
+                st.set(iid, { state: lg && lg.state === 'rejected' ? 'rejected' : (lg && lg.state === 'other' ? 'other' : 'changed'), loc: where, cid: c.cid, current: near.map((x) => canon(x.t)).join(' ') });
+                return;
+              }
               if (!on && lg && lg.state === 'rejected') s = 'rejected';
               if (!on && lg && lg.state === 'other' && lg.wide && lg.span === exact) s = 'other';   // "אחר" רחב: יונתן שינה סביב ההצעה (למשל הזיז פסיק)
               if (on && lg && lg.state === 'other') s = 'other';   // "אחר" שהנוסח שלו זהה להצעה
@@ -307,9 +338,11 @@
           if (it.cluster) continue;
           if (it.op === 'none') {
             // פריט מידע: גם לו יש מקום, כדי שיונתן יוכל לכתוב שם "אחר"
-            const lg = this.log[it.id], outs = [p.orig_tokens.slice(it.from, it.to + 1)];
+            // to של פריט מידע כולל לפעמים את התיבה שאחרי (old שנגמר ברווח): לפי מספר המילים ב-old
+            const nOld = splitWords(it.old || '').length, to1 = nOld ? Math.min(it.to, it.from + nOld - 1) : it.to;
+            const lg = this.log[it.id], outs = [p.orig_tokens.slice(it.from, to1 + 1)];
             if (lg && lg.state === 'other' && lg.span) outs.push(splitWords(lg.span));
-            const l = locate(seq, p.orig_tokens.slice(Math.max(0, it.from - 3), it.from), p.orig_tokens.slice(it.to + 1, it.to + 4), outs, it.from / ntok);
+            const l = locate(seq, p.orig_tokens.slice(Math.max(0, it.from - 3), it.from), p.orig_tokens.slice(to1 + 1, to1 + 4), outs, it.from / ntok);
             let loc = null, current = null;
             if (l) { const sp = seq.slice(l.startSeq, l.endSeq); if (sp.length && sp.every((x) => x.key === sp[0].key)) { loc = { key: sp[0].key, from: sp[0].idx, to: sp[sp.length - 1].idx }; current = sp.map((x) => canon(x.t)).join(' '); } }
             st.set(it.id, { state: (lg && lg.state) || 'info', loc, current });
